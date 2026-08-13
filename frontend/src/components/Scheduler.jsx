@@ -128,6 +128,75 @@ const Scheduler = () => {
     }
   };
 
+  // --- Drag & Drop for workstation-week custom grid ---
+  const [dragOverCell, setDragOverCell] = useState(null);
+
+  const handleDragStart = (e, ev) => {
+    e.dataTransfer.setData('text/plain', JSON.stringify({ id: ev.id }));
+    // allow move
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleCellDrop = async (e, targetDate, targetWs) => {
+    e.preventDefault();
+    setDragOverCell(null);
+    let payload;
+    try {
+      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+      const eventId = data.id;
+      const ev = events.find(x => x.id === eventId);
+      if (!ev) throw new Error('Event not found');
+
+      const isAllDay = ev.allDay;
+      const origStart = ev.start instanceof Date ? ev.start : new Date(ev.start);
+      const origEnd = ev.end ? (ev.end instanceof Date ? ev.end : new Date(ev.end)) : origStart;
+      const durationMs = origEnd.getTime() - origStart.getTime();
+
+      // compute new start/end
+      let newStart, newEnd;
+      if (isAllDay) {
+        newStart = new Date(targetDate);
+        newStart.setHours(0,0,0,0);
+        // keep same-day for all-day items (user can edit later)
+        newEnd = new Date(newStart);
+      } else {
+        // keep the original time of day
+        newStart = new Date(targetDate);
+        newStart.setHours(origStart.getHours(), origStart.getMinutes(), origStart.getSeconds(), 0);
+        newEnd = new Date(newStart.getTime() + Math.max(0, durationMs));
+      }
+
+      await rescheduleEvent(ev, newStart, newEnd);
+      await fetchSchedule();
+    } catch (err) {
+      alert('Failed to move event: ' + (err.message || err));
+    }
+  };
+
+  const rescheduleEvent = async (eventObj, newStart, newEnd) => {
+    const type = eventObj.extendedProps?.type;
+    const docName = eventObj.extendedProps?.docName;
+    if (!type || !docName) throw new Error('Invalid event data');
+
+    if (type === 'jobcard') {
+      const response = await fetch(`${API_URL}/job-cards/${docName}/reschedule`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from_time: formatDateTimeLocal(newStart), to_time: formatDateTimeLocal(newEnd) })
+      });
+      await handleApiResponse(response, 'Failed to reschedule job card');
+    } else if (type === 'workorder') {
+      const response = await fetch(`${API_URL}/work-orders/${docName}/reschedule`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planned_start_date: formatDateLocal(newStart), planned_end_date: formatDateLocal(newEnd) })
+      });
+      await handleApiResponse(response, 'Failed to reschedule work order');
+    } else {
+      throw new Error('Unknown event type');
+    }
+  };
+
   // Determine color based on Job Card status
   const getStatusColor = (status) => {
     const colors = {
@@ -326,12 +395,22 @@ const Scheduler = () => {
                         const evtWs = e.extendedProps?.workstation || 'Unassigned';
                         return matchesType && evtWs === ws && eventIntersectsDay(e, d);
                       });
+                      const cellKey = `${ws}::${d.toISOString()}`;
                       return (
-                        <div className="ws-cell" key={d.toISOString()}>
+                        <div
+                          className={`ws-cell ${dragOverCell === cellKey ? 'drag-over' : ''}`}
+                          key={d.toISOString()}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDragEnter={() => setDragOverCell(cellKey)}
+                          onDragLeave={() => setDragOverCell(null)}
+                          onDrop={(e) => handleCellDrop(e, d, ws)}
+                        >
                           {cellEvents.map(ev => (
                             <div
                               key={ev.id}
                               className="ws-event"
+                              draggable
+                              onDragStart={(e) => handleDragStart(e, ev)}
                               style={{ backgroundColor: ev.backgroundColor || '#3498db', border: `1px solid ${ev.borderColor || '#2c3e50'}` }}
                               onClick={() => window.open(`http://localhost:8080/app/${ev.extendedProps.type === 'jobcard' ? 'job-card' : 'work-order'}/${ev.extendedProps.docName}`, '_blank')}
                             >
