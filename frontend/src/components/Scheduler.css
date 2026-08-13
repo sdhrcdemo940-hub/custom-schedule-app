@@ -110,6 +110,49 @@
   box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
+/* Workstation-week grid */
+.ws-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ws-grid-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.ws-name-col {
+  width: 180px;
+  padding: 8px;
+  background: #f7f9fb;
+  border-right: 1px solid #e0e6ea;
+  font-weight: 600;
+}
+.ws-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+.ws-week-title {
+  margin-left: 12px;
+  font-weight: 600;
+}
+.ws-row {
+  display: flex;
+  align-items: stretch;
+  border-top: 1px solid #ecf0f1;
+}
+.ws-calendar-col {
+  flex: 1;
+}
+.ws-name-col {
+  display: flex;
+  align-items: center;
+  padding: 12px;
+}
+
 /* FullCalendar Customization */
 .fc {
   background-color: white;

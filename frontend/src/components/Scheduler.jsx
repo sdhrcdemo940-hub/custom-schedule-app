@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
@@ -12,6 +12,8 @@ const Scheduler = () => {
   const [error, setError] = useState(null);
   const [viewFilter, setViewFilter] = useState('all');
   const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000/api';
+  const [activeDate, setActiveDate] = useState(() => new Date());
+  const [showWorkstationWeek, setShowWorkstationWeek] = useState(false);
 
   // Fetch data from backend
   useEffect(() => {
@@ -46,7 +48,8 @@ const Scheduler = () => {
           type: 'jobcard',
           docName: jc.name,
           status: jc.status,
-          workOrder: jc.work_order
+          workOrder: jc.work_order,
+          workstation: jc.workstation || jc.workstation_name || jc.work_center || jc.work_center_name || jc.machine || jc.workstation_id || null
         }
       }));
 
@@ -63,6 +66,7 @@ const Scheduler = () => {
           type: 'workorder',
           docName: wo.name,
           status: wo.status
+          ,workstation: wo.workstation || wo.workstation_name || wo.work_center || wo.work_center_name || wo.machine || null
         }
       }));
 
@@ -160,6 +164,27 @@ const Scheduler = () => {
     return colors[status] || '#3498db';
   };
 
+  const workstations = useMemo(() => {
+    const s = new Set();
+    events.forEach(e => {
+      const w = e.extendedProps?.workstation || 'Unassigned';
+      s.add(w);
+    });
+    return Array.from(s);
+  }, [events]);
+
+  const formatWeekTitle = (date) => {
+    const start = new Date(date);
+    // find start of week (Monday)
+    const day = start.getDay();
+    const diff = (day === 0 ? -6 : 1) - day; // make Monday the first day
+    start.setDate(start.getDate() + diff);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    const opts = { month: 'short', day: 'numeric' };
+    return `${start.toLocaleDateString(undefined, opts)} - ${end.toLocaleDateString(undefined, opts)}`;
+  };
+
   if (loading) return <div className="scheduler-loading">Loading schedule...</div>;
 
   return (
@@ -179,6 +204,9 @@ const Scheduler = () => {
           <button onClick={fetchSchedule} className="btn-refresh">
             Refresh
           </button>
+          <button onClick={() => setShowWorkstationWeek(s => !s)} className={showWorkstationWeek ? 'btn-active' : ''}>
+            Workstation Week
+          </button>
         </div>
       </div>
 
@@ -195,33 +223,81 @@ const Scheduler = () => {
       </div>
 
       <div className="calendar-wrapper">
-        <FullCalendar
-          ref={calendarRef}
-          plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-          initialView="dayGridMonth"
-          headerToolbar={{
-            left: 'prev,next today',
-            center: 'title',
-            right: 'dayGridMonth,timeGridWeek,timeGridDay'
-          }}
-          events={events.filter((event) => {
-            if (viewFilter === 'all') return true;
-            return event.extendedProps?.type === viewFilter;
-          })}
-          editable={true}
-          eventDrop={handleEventDrop}
-          eventResize={handleEventDrop}
-          eventDisplay="block"
-          height="auto"
-          dateClick={(info) => {
-            const calendarApi = calendarRef.current.getApi();
-            calendarApi.changeView('timeGridDay', info.date);
-          }}
-          eventClick={(info) => {
-            const docType = info.event.extendedProps.type === 'jobcard' ? 'job-card' : 'work-order';
-            window.open(`http://localhost:8080/app/${docType}/${info.event.extendedProps.docName}`, '_blank');
-          }}
-        />
+        {!showWorkstationWeek && (
+          <FullCalendar
+            ref={calendarRef}
+            plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+            initialView="dayGridMonth"
+            headerToolbar={{
+              left: 'prev,next today',
+              center: 'title',
+              right: 'dayGridMonth,timeGridWeek,timeGridDay'
+            }}
+            events={events.filter((event) => {
+              if (viewFilter === 'all') return true;
+              return event.extendedProps?.type === viewFilter;
+            })}
+            editable={true}
+            eventDrop={handleEventDrop}
+            eventResize={handleEventDrop}
+            eventDisplay="block"
+            height="auto"
+            dateClick={(info) => {
+              const calendarApi = calendarRef.current.getApi();
+              calendarApi.changeView('timeGridDay', info.date);
+            }}
+            eventClick={(info) => {
+              const docType = info.event.extendedProps.type === 'jobcard' ? 'job-card' : 'work-order';
+              window.open(`http://localhost:8080/app/${docType}/${info.event.extendedProps.docName}`, '_blank');
+            }}
+          />
+        )}
+
+        {showWorkstationWeek && (
+          <div className="ws-grid">
+            <div className="ws-grid-header">
+              <div className="ws-name-col">Workstation</div>
+              <div className="ws-controls">
+                <button onClick={() => setActiveDate(d => { const nd = new Date(d); nd.setDate(nd.getDate() - 7); return nd; })}>&lt;</button>
+                <button onClick={() => setActiveDate(new Date())}>Today</button>
+                <button onClick={() => setActiveDate(d => { const nd = new Date(d); nd.setDate(nd.getDate() + 7); return nd; })}>&gt;</button>
+                <div className="ws-week-title">{formatWeekTitle(activeDate)}</div>
+              </div>
+            </div>
+
+            {workstations.map((ws) => (
+              <div className="ws-row" key={ws}>
+                <div className="ws-name-col">{ws}</div>
+                <div className="ws-calendar-col">
+                  <FullCalendar
+                    plugins={[timeGridPlugin, interactionPlugin]}
+                    initialView="timeGridWeek"
+                    initialDate={activeDate}
+                    headerToolbar={false}
+                    events={events.filter(e => {
+                      const matchesType = viewFilter === 'all' ? true : e.extendedProps?.type === viewFilter;
+                      const evtWs = e.extendedProps?.workstation || e.extendedProps?.workOrder || 'Unassigned';
+                      return matchesType && evtWs === ws;
+                    })}
+                    editable={true}
+                    eventDrop={handleEventDrop}
+                    eventResize={handleEventDrop}
+                    eventDisplay="block"
+                    height={120}
+                    allDaySlot={false}
+                    slotMinTime="06:00:00"
+                    slotMaxTime="20:00:00"
+                    nowIndicator={true}
+                    eventClick={(info) => {
+                      const docType = info.event.extendedProps.type === 'jobcard' ? 'job-card' : 'work-order';
+                      window.open(`http://localhost:8080/app/${docType}/${info.event.extendedProps.docName}`, '_blank');
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
