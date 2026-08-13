@@ -35,10 +35,10 @@ const Scheduler = () => {
         return new Date(normalized);
       };
 
-      // Transform Job Cards
+      // Transform Job Cards (show parent Work Order in title)
       const jobCardEvents = (data.jobCards || []).map(jc => ({
         id: `jc-${jc.name}`,
-        title: `JC: ${jc.subject || jc.name}`,
+        title: `JC: ${jc.subject || jc.name}${jc.work_order ? ' — WO: ' + jc.work_order : ''}`,
         start: parseDateTime(jc.from_time),
         end: parseDateTime(jc.to_time),
         allDay: false,
@@ -53,22 +53,24 @@ const Scheduler = () => {
         }
       }));
 
-      // Transform Work Orders (normalize dates)
-      const workOrderEvents = (data.workOrders || []).map(wo => ({
-        id: `wo-${wo.name}`,
-        title: `WO: ${wo.title || wo.name}`,
-        start: parseDateTime(wo.planned_start_date),
-        end: parseDateTime(wo.planned_end_date),
-        allDay: true,
-        backgroundColor: getStatusColorWO(wo.status),
-        borderColor: '#34495e',
-        extendedProps: {
-          type: 'workorder',
-          docName: wo.name,
-          status: wo.status,
-          workstation: wo.workstation || wo.workstation_name || wo.work_center || wo.work_center_name || wo.machine || null
-        }
-      }));
+      // Show job cards and also keep Work Orders with status 'Not Started' so users can navigate
+      const workOrderEvents = (data.workOrders || [])
+        .filter(wo => (wo.status || '').toLowerCase() === 'not started')
+        .map(wo => ({
+          id: `wo-${wo.name}`,
+          title: `WO: ${wo.title || wo.name}`,
+          start: parseDateTime(wo.planned_start_date),
+          end: parseDateTime(wo.planned_end_date),
+          allDay: true,
+          backgroundColor: getStatusColorWO(wo.status),
+          borderColor: '#34495e',
+          extendedProps: {
+            type: 'workorder',
+            docName: wo.name,
+            status: wo.status,
+            workstation: wo.workstation || wo.workstation_name || wo.work_center || wo.work_center_name || wo.machine || null
+          }
+        }));
 
       setEvents([...jobCardEvents, ...workOrderEvents]);
       setError(null);
@@ -128,68 +130,80 @@ const Scheduler = () => {
     }
   };
 
-  // --- Drag & Drop for workstation-week custom grid ---
+  // Drag & drop state and handlers for custom workstation-week grid
   const [dragOverCell, setDragOverCell] = useState(null);
 
   const handleDragStart = (e, ev) => {
-    e.dataTransfer.setData('text/plain', JSON.stringify({ id: ev.id }));
-    // allow move
-    e.dataTransfer.effectAllowed = 'move';
+    try {
+      e.dataTransfer.setData('text/plain', JSON.stringify({ id: ev.id }));
+      e.dataTransfer.effectAllowed = 'move';
+    } catch (err) {
+      // ignore
+    }
+  };
+
+  const handleCellDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
   };
 
   const handleCellDrop = async (e, targetDate, targetWs) => {
     e.preventDefault();
     setDragOverCell(null);
-    let payload;
     try {
-      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-      const eventId = data.id;
+      const raw = e.dataTransfer.getData('text/plain');
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      const eventId = parsed.id;
       const ev = events.find(x => x.id === eventId);
       if (!ev) throw new Error('Event not found');
 
-      const isAllDay = ev.allDay;
+      const isAllDay = !!ev.allDay;
       const origStart = ev.start instanceof Date ? ev.start : new Date(ev.start);
       const origEnd = ev.end ? (ev.end instanceof Date ? ev.end : new Date(ev.end)) : origStart;
-      const durationMs = origEnd.getTime() - origStart.getTime();
+      const durationMs = Math.max(0, origEnd.getTime() - origStart.getTime());
 
-      // compute new start/end
       let newStart, newEnd;
       if (isAllDay) {
         newStart = new Date(targetDate);
         newStart.setHours(0,0,0,0);
-        // keep same-day for all-day items (user can edit later)
         newEnd = new Date(newStart);
       } else {
-        // keep the original time of day
         newStart = new Date(targetDate);
         newStart.setHours(origStart.getHours(), origStart.getMinutes(), origStart.getSeconds(), 0);
-        newEnd = new Date(newStart.getTime() + Math.max(0, durationMs));
+        newEnd = new Date(newStart.getTime() + durationMs);
       }
 
-      await rescheduleEvent(ev, newStart, newEnd);
+      // call appropriate reschedule endpoint
+      await rescheduleEvent(ev, newStart, newEnd, targetWs);
       await fetchSchedule();
     } catch (err) {
+      console.error('Drop error', err);
       alert('Failed to move event: ' + (err.message || err));
     }
   };
 
-  const rescheduleEvent = async (eventObj, newStart, newEnd) => {
+  const rescheduleEvent = async (eventObj, newStart, newEnd, newWorkstation) => {
     const type = eventObj.extendedProps?.type;
     const docName = eventObj.extendedProps?.docName;
     if (!type || !docName) throw new Error('Invalid event data');
 
     if (type === 'jobcard') {
+      const body = { from_time: formatDateTimeLocal(newStart), to_time: formatDateTimeLocal(newEnd) };
+      if (newWorkstation) body.workstation = newWorkstation;
       const response = await fetch(`${API_URL}/job-cards/${docName}/reschedule`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from_time: formatDateTimeLocal(newStart), to_time: formatDateTimeLocal(newEnd) })
+        body: JSON.stringify(body)
       });
       await handleApiResponse(response, 'Failed to reschedule job card');
     } else if (type === 'workorder') {
+      const body = { planned_start_date: formatDateLocal(newStart), planned_end_date: formatDateLocal(newEnd) };
+      if (newWorkstation) body.workstation = newWorkstation;
       const response = await fetch(`${API_URL}/work-orders/${docName}/reschedule`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planned_start_date: formatDateLocal(newStart), planned_end_date: formatDateLocal(newEnd) })
+        body: JSON.stringify(body)
       });
       await handleApiResponse(response, 'Failed to reschedule work order');
     } else {
@@ -288,9 +302,7 @@ const Scheduler = () => {
           <button onClick={() => setViewFilter('all')} className={viewFilter === 'all' ? 'btn-active' : ''}>
             All
           </button>
-          <button onClick={() => setViewFilter('workorder')} className={viewFilter === 'workorder' ? 'btn-active' : ''}>
-            Work Orders
-          </button>
+          {/* Work Orders are displayed under Job Cards; standalone Work Orders hidden */}
           <button onClick={() => setViewFilter('jobcard')} className={viewFilter === 'jobcard' ? 'btn-active' : ''}>
             Job Cards
           </button>
@@ -311,7 +323,7 @@ const Scheduler = () => {
           <span><span className="legend-box" style={{ backgroundColor: getStatusColor('Not Started'), border: '1px solid #2c3e50' }}></span> JC: Not Started</span>
           <span><span className="legend-box" style={{ backgroundColor: getStatusColor('In Progress'), border: '1px solid #2c3e50' }}></span> JC: In Progress</span>
           <span><span className="legend-box" style={{ backgroundColor: getStatusColor('Completed'), border: '1px solid #2c3e50' }}></span> JC: Completed</span>
-          <span><span className="legend-box" style={{ backgroundColor: getStatusColorWO('Submitted'), border: '1px solid #34495e' }}></span> WO: Submitted</span>
+          <span><span className="legend-box" style={{ backgroundColor: getStatusColorWO('Draft'), border: '1px solid #34495e' }}></span> WO: Not Started</span>
         </div>
       </div>
 
@@ -400,7 +412,7 @@ const Scheduler = () => {
                         <div
                           className={`ws-cell ${dragOverCell === cellKey ? 'drag-over' : ''}`}
                           key={d.toISOString()}
-                          onDragOver={(e) => e.preventDefault()}
+                          onDragOver={handleCellDragOver}
                           onDragEnter={() => setDragOverCell(cellKey)}
                           onDragLeave={() => setDragOverCell(null)}
                           onDrop={(e) => handleCellDrop(e, d, ws)}
