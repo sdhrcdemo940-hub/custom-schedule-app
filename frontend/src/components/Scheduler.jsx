@@ -53,20 +53,20 @@ const Scheduler = () => {
         }
       }));
 
-      // Transform Work Orders
+      // Transform Work Orders (normalize dates)
       const workOrderEvents = (data.workOrders || []).map(wo => ({
         id: `wo-${wo.name}`,
         title: `WO: ${wo.title || wo.name}`,
-        start: wo.planned_start_date,
-        end: wo.planned_end_date,
+        start: parseDateTime(wo.planned_start_date),
+        end: parseDateTime(wo.planned_end_date),
         allDay: true,
         backgroundColor: getStatusColorWO(wo.status),
         borderColor: '#34495e',
         extendedProps: {
           type: 'workorder',
           docName: wo.name,
-          status: wo.status
-          ,workstation: wo.workstation || wo.workstation_name || wo.work_center || wo.work_center_name || wo.machine || null
+          status: wo.status,
+          workstation: wo.workstation || wo.workstation_name || wo.work_center || wo.work_center_name || wo.machine || null
         }
       }));
 
@@ -185,6 +185,30 @@ const Scheduler = () => {
     return `${start.toLocaleDateString(undefined, opts)} - ${end.toLocaleDateString(undefined, opts)}`;
   };
 
+  const getWeekDays = (date) => {
+    const start = new Date(date);
+    const day = start.getDay();
+    const diff = (day === 0 ? -6 : 1) - day; // Monday start
+    start.setDate(start.getDate() + diff);
+    start.setHours(0,0,0,0);
+    return Array.from({ length: 7 }).map((_, i) => {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      d.setHours(0,0,0,0);
+      return d;
+    });
+  };
+
+  const eventIntersectsDay = (ev, day) => {
+    if (!ev) return false;
+    const s = ev.start instanceof Date ? ev.start : new Date(ev.start);
+    let en = ev.end ? (ev.end instanceof Date ? ev.end : new Date(ev.end)) : s;
+    // normalize times
+    const dayStart = new Date(day); dayStart.setHours(0,0,0,0);
+    const dayEnd = new Date(day); dayEnd.setHours(23,59,59,999);
+    return s <= dayEnd && en >= dayStart;
+  };
+
   if (loading) return <div className="scheduler-loading">Loading schedule...</div>;
 
   return (
@@ -215,10 +239,10 @@ const Scheduler = () => {
       <div className="scheduler-info">
         <p>Drag and drop events to reschedule Job Cards and Work Orders</p>
         <div className="legend">
-          <span><span className="legend-box" style={{ backgroundColor: '#3498db' }}></span> JC: Not Started</span>
-          <span><span className="legend-box" style={{ backgroundColor: '#f39c12' }}></span> JC: In Progress</span>
-          <span><span className="legend-box" style={{ backgroundColor: '#27ae60' }}></span> JC: Completed</span>
-          <span><span className="legend-box" style={{ backgroundColor: '#9b59b6' }}></span> WO: Submitted</span>
+          <span><span className="legend-box" style={{ backgroundColor: getStatusColor('Not Started'), border: '1px solid #2c3e50' }}></span> JC: Not Started</span>
+          <span><span className="legend-box" style={{ backgroundColor: getStatusColor('In Progress'), border: '1px solid #2c3e50' }}></span> JC: In Progress</span>
+          <span><span className="legend-box" style={{ backgroundColor: getStatusColor('Completed'), border: '1px solid #2c3e50' }}></span> JC: Completed</span>
+          <span><span className="legend-box" style={{ backgroundColor: getStatusColorWO('Submitted'), border: '1px solid #34495e' }}></span> WO: Submitted</span>
         </div>
       </div>
 
@@ -255,47 +279,72 @@ const Scheduler = () => {
 
         {showWorkstationWeek && (
           <div className="ws-grid">
-            <div className="ws-grid-header">
-              <div className="ws-name-col">Workstation</div>
-              <div className="ws-controls">
+            <div className="ws-controls">
                 <button onClick={() => setActiveDate(d => { const nd = new Date(d); nd.setDate(nd.getDate() - 7); return nd; })}>&lt;</button>
                 <button onClick={() => setActiveDate(new Date())}>Today</button>
                 <button onClick={() => setActiveDate(d => { const nd = new Date(d); nd.setDate(nd.getDate() + 7); return nd; })}>&gt;</button>
                 <div className="ws-week-title">{formatWeekTitle(activeDate)}</div>
               </div>
-            </div>
-
-            {workstations.map((ws) => (
-              <div className="ws-row" key={ws}>
-                <div className="ws-name-col">{ws}</div>
-                <div className="ws-calendar-col">
-                  <FullCalendar
-                    plugins={[timeGridPlugin, interactionPlugin]}
-                    initialView="timeGridWeek"
-                    initialDate={activeDate}
-                    headerToolbar={false}
-                    events={events.filter(e => {
-                      const matchesType = viewFilter === 'all' ? true : e.extendedProps?.type === viewFilter;
-                      const evtWs = e.extendedProps?.workstation || e.extendedProps?.workOrder || 'Unassigned';
-                      return matchesType && evtWs === ws;
-                    })}
-                    editable={true}
-                    eventDrop={handleEventDrop}
-                    eventResize={handleEventDrop}
-                    eventDisplay="block"
-                    height={120}
-                    allDaySlot={false}
-                    slotMinTime="06:00:00"
-                    slotMaxTime="20:00:00"
-                    nowIndicator={true}
-                    eventClick={(info) => {
-                      const docType = info.event.extendedProps.type === 'jobcard' ? 'job-card' : 'work-order';
-                      window.open(`http://localhost:8080/app/${docType}/${info.event.extendedProps.docName}`, '_blank');
-                    }}
-                  />
+            <div className="ws-name-col">Workstation</div>
+            <div className="ws-date-row">
+              <div className="ws-date-col">
+                <div className="ws-date-grid">
+                  {(() => {
+                    const days = [];
+                    const start = new Date(activeDate);
+                    const day = start.getDay();
+                    const diff = (day === 0 ? -6 : 1) - day; // Monday start
+                    start.setDate(start.getDate() + diff);
+                    for (let i = 0; i < 7; i++) {
+                      const d = new Date(start);
+                      d.setDate(start.getDate() + i);
+                      days.push(d);
+                    }
+                    return days.map(d => (
+                      <div key={d.toISOString()} className="ws-date-cell">
+                        <div className="ws-date-day">{d.toLocaleDateString(undefined, { weekday: 'short' })}</div>
+                        <div className="ws-date-num">{d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div>
+                      </div>
+                    ));
+                  })()}
                 </div>
               </div>
-            ))}
+            </div>
+
+            {/* Single shared date header row */}
+            
+
+            {(() => {
+              const days = getWeekDays(activeDate);
+              return workstations.map((ws) => (
+                <div className="ws-row" key={ws}>
+                  <div className="ws-name-col">{ws}</div>
+                  <div className="ws-row-grid">
+                    {days.map(d => {
+                      const cellEvents = events.filter(e => {
+                        const matchesType = viewFilter === 'all' ? true : e.extendedProps?.type === viewFilter;
+                        const evtWs = e.extendedProps?.workstation || 'Unassigned';
+                        return matchesType && evtWs === ws && eventIntersectsDay(e, d);
+                      });
+                      return (
+                        <div className="ws-cell" key={d.toISOString()}>
+                          {cellEvents.map(ev => (
+                            <div
+                              key={ev.id}
+                              className="ws-event"
+                              style={{ backgroundColor: ev.backgroundColor || '#3498db', border: `1px solid ${ev.borderColor || '#2c3e50'}` }}
+                              onClick={() => window.open(`http://localhost:8080/app/${ev.extendedProps.type === 'jobcard' ? 'job-card' : 'work-order'}/${ev.extendedProps.docName}`, '_blank')}
+                            >
+                              {ev.title}
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ));
+            })()}
           </div>
         )}
       </div>
