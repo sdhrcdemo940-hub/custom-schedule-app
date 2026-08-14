@@ -80,37 +80,39 @@ app.get('/api/job-cards/:id', async (req, res) => {
   }
 });
 
-const updateJobCardSchedule = async (jobCardId, from_time, to_time) => {
+const updateJobCardSchedule = async (jobCardId, from_time, to_time, workstation) => {
   // Fetch the Job Card so we can update the scheduled_time_logs child row if present.
   const jobCardResponse = await erpnextAPI.get(`/Job Card/${jobCardId}`);
   const jobCard = jobCardResponse.data.data;
   const scheduledLogs = Array.isArray(jobCard.scheduled_time_logs) ? jobCard.scheduled_time_logs : [];
 
-  if (scheduledLogs.length > 0) {
-    return erpnextAPI.put(`/Job Card/${jobCardId}`, {
-      scheduled_time_logs: [
-        {
-          name: scheduledLogs[0].name,
-          from_time,
-          to_time
-        }
-      ]
-    });
+  const payload = {};
+  if (workstation) {
+    payload.workstation = workstation;
   }
 
-  // Fallback if no scheduled_time_logs child exists.
-  return erpnextAPI.put(`/Job Card/${jobCardId}`, {
-    from_time: from_time,
-    to_time: to_time
-  });
+  if (scheduledLogs.length > 0) {
+    payload.scheduled_time_logs = [
+      {
+        name: scheduledLogs[0].name,
+        from_time,
+        to_time
+      }
+    ];
+  } else {
+    payload.from_time = from_time;
+    payload.to_time = to_time;
+  }
+
+  return erpnextAPI.put(`/Job Card/${jobCardId}`, payload);
 };
 
 // Update Job Card dates (reschedule)
 app.put('/api/job-cards/:id/reschedule', async (req, res) => {
   try {
-    const { from_time, to_time } = req.body;
+    const { from_time, to_time, workstation } = req.body;
     
-    const response = await updateJobCardSchedule(req.params.id, from_time, to_time);
+    const response = await updateJobCardSchedule(req.params.id, from_time, to_time, workstation);
     
     res.json({
       success: true,
@@ -196,11 +198,45 @@ app.put('/api/work-orders/:id/reschedule', async (req, res) => {
   }
 });
 
+// ==================== WORKSTATION ENDPOINTS ====================
+
+// Get all Workstations
+app.get('/api/workstations', async (req, res) => {
+  try {
+    const wsResp = await erpnextAPI.get('/Workstation', {
+      params: {
+        fields: JSON.stringify(['name', 'workstation_name', 'workstation_type', 'status']),
+        filters: JSON.stringify([['disabled', '=', 0]]),
+        limit_page_length: 500
+      }
+    });
+    res.json(wsResp.data.data || []);
+  } catch (error) {
+    console.error('Error fetching workstations:', error.response ? error.response.data : error.message);
+    res.status(500).json({ error: error.message, details: error.response ? error.response.data : null });
+  }
+});
+
 // ==================== COMBINED SCHEDULE ENDPOINTS ====================
 
-// Get combined schedule (both Job Cards and Work Orders)
+// Get combined schedule (both Job Cards, Work Orders, and Workstations)
 app.get('/api/schedule', async (req, res) => {
   try {
+    // Fetch Workstations
+    let workstations = [];
+    try {
+      const wsResp = await erpnextAPI.get('/Workstation', {
+        params: {
+          fields: JSON.stringify(['name', 'workstation_name', 'workstation_type', 'status']),
+          filters: JSON.stringify([['disabled', '=', 0]]),
+          limit_page_length: 500
+        }
+      });
+      workstations = wsResp.data.data || [];
+    } catch (wsErr) {
+      console.warn('Could not fetch workstations:', wsErr.message);
+    }
+
     // Fetch Work Order names first, then fetch full documents individually
     const woListResp = await erpnextAPI.get('/Work Order', {
       params: {
@@ -240,6 +276,7 @@ app.get('/api/schedule', async (req, res) => {
     }));
 
     res.json({
+      workstations: workstations,
       jobCards: jobCardsDetails.filter(Boolean),
       workOrders: workOrdersDetails.filter(Boolean)
     });

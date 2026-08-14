@@ -5,72 +5,138 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import './Scheduler.css';
 
+const ZOOM_LEVELS = [
+  { label: 'Compact (Fit)', dayWidth: 58, fontSize: '10px' },
+  { label: 'Standard', dayWidth: 90, fontSize: '11px' },
+  { label: 'Comfortable', dayWidth: 140, fontSize: '12px' },
+  { label: 'Detailed', dayWidth: 200, fontSize: '13px' },
+  { label: 'Expanded', dayWidth: 280, fontSize: '13px' }
+];
+
 const Scheduler = () => {
   const calendarRef = useRef(null);
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [viewFilter, setViewFilter] = useState('all');
-  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000/api';
-  const [activeDate, setActiveDate] = useState(() => new Date());
-  const [showWorkstationWeek, setShowWorkstationWeek] = useState(false);
+  const matrixScrollRef = useRef(null);
 
-  // Fetch data from backend
+  const [events, setEvents] = useState([]);
+  const [backendWorkstations, setBackendWorkstations] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [toastMessage, setToastMessage] = useState(null);
+  const [error, setError] = useState(null);
+
+  // Active view: 'matrix' (Monthly Production Schedule) or 'calendar' (FullCalendar)
+  const [activeTab, setActiveTab] = useState('matrix');
+  const [viewFilter, setViewFilter] = useState('all'); // 'all', 'jobcard', 'workorder'
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+
+  // Matrix navigation state: active month (defaults to current date, e.g. August 2026)
+  const [activeDate, setActiveDate] = useState(() => {
+    const d = new Date();
+    if (d.getFullYear() < 2026) {
+      return new Date(2026, 7, 1); // August 2026
+    }
+    return d;
+  });
+
+  const [zoomIndex, setZoomIndex] = useState(1); // Default to Standard (90px)
+  const [draggedEvent, setDraggedEvent] = useState(null);
+  const [dragOverCell, setDragOverCell] = useState(null);
+
+  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3500/api';
+
   useEffect(() => {
     fetchSchedule();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const showToast = (msg, isError = false) => {
+    setToastMessage({ text: msg, isError });
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 4000);
+  };
+
+  const parseDateTime = (value) => {
+    if (!value) return null;
+    if (value instanceof Date) return value;
+    const normalized = String(value).replace(' ', 'T');
+    const d = new Date(normalized);
+    return isNaN(d.getTime()) ? null : d;
+  };
 
   const fetchSchedule = async () => {
     setLoading(true);
     try {
       const response = await fetch(`${API_URL}/schedule`);
-      if (!response.ok) throw new Error('Failed to fetch schedule');
+      if (!response.ok) throw new Error(`Failed to fetch schedule (${response.statusText})`);
       
       const data = await response.json();
       
-      const parseDateTime = (value) => {
-        if (!value) return null;
-        if (value instanceof Date) return value;
-        const normalized = value.replace(' ', 'T');
-        return new Date(normalized);
-      };
+      if (Array.isArray(data.workstations)) {
+        setBackendWorkstations(data.workstations);
+      }
 
-      // Transform Job Cards (show parent Work Order in title)
-      const jobCardEvents = (data.jobCards || []).map(jc => ({
-        id: `jc-${jc.name}`,
-        title: `JC: ${jc.subject || jc.name}${jc.work_order ? ' — WO: ' + jc.work_order : ''}`,
-        start: parseDateTime(jc.from_time),
-        end: parseDateTime(jc.to_time),
-        allDay: false,
-        backgroundColor: getStatusColor(jc.status),
-        borderColor: '#2c3e50',
-        extendedProps: {
-          type: 'jobcard',
-          docName: jc.name,
-          status: jc.status,
-          workOrder: jc.work_order,
-          workstation: jc.workstation || jc.workstation_name || jc.work_center || jc.work_center_name || jc.machine || jc.workstation_id || null
-        }
-      }));
+      // Transform Job Cards
+      const jobCardEvents = (data.jobCards || []).map(jc => {
+        const startTime = parseDateTime(jc.from_time);
+        const endTime = parseDateTime(jc.to_time);
+        const itemCode = jc.production_item || jc.item_name || '';
+        const qty = jc.for_quantity || jc.total_completed_qty || '';
+        const operation = jc.operation || '';
+        const station = jc.workstation || jc.workstation_name || jc.workstation_type || 'Unassigned';
 
-      // Show job cards and also keep Work Orders with status 'Not Started' so users can navigate
-      const workOrderEvents = (data.workOrders || [])
-        .filter(wo => (wo.status || '').toLowerCase() === 'not started')
-        .map(wo => ({
+        return {
+          id: `jc-${jc.name}`,
+          title: `${itemCode ? itemCode + ' : ' : ''}${qty ? qty + ' ' : ''}${jc.subject || jc.name}`,
+          start: startTime,
+          end: endTime,
+          allDay: false,
+          backgroundColor: getStatusColor(jc.status),
+          borderColor: '#1e293b',
+          extendedProps: {
+            type: 'jobcard',
+            docName: jc.name,
+            itemCode: itemCode,
+            qty: qty,
+            operation: operation,
+            status: jc.status,
+            workOrder: jc.work_order,
+            workstation: station,
+            raw: jc
+          }
+        };
+      });
+
+      // Transform Work Orders
+      const workOrderEvents = (data.workOrders || []).map(wo => {
+        const startTime = parseDateTime(wo.planned_start_date || wo.creation);
+        const endTime = parseDateTime(wo.planned_end_date || wo.planned_start_date || wo.creation);
+        const itemCode = wo.production_item || wo.item_name || '';
+        const qty = wo.qty || '';
+        const station = wo.workstation || wo.workstation_name || 'Unassigned';
+
+        return {
           id: `wo-${wo.name}`,
-          title: `WO: ${wo.title || wo.name}`,
-          start: parseDateTime(wo.planned_start_date),
-          end: parseDateTime(wo.planned_end_date),
+          title: `WO: ${itemCode ? itemCode + ' : ' : ''}${qty ? qty + ' ' : ''}${wo.name}`,
+          start: startTime,
+          end: endTime,
           allDay: true,
           backgroundColor: getStatusColorWO(wo.status),
-          borderColor: '#34495e',
+          borderColor: '#334155',
           extendedProps: {
             type: 'workorder',
             docName: wo.name,
+            itemCode: itemCode,
+            qty: qty,
+            operation: 'Production',
             status: wo.status,
-            workstation: wo.workstation || wo.workstation_name || wo.work_center || wo.work_center_name || wo.machine || null
+            workOrder: wo.name,
+            workstation: station,
+            raw: wo
           }
-        }));
+        };
+      });
 
       setEvents([...jobCardEvents, ...workOrderEvents]);
       setError(null);
@@ -82,58 +148,272 @@ const Scheduler = () => {
     }
   };
 
-  // Handle drop event (reschedule)
-  const handleApiResponse = async (response, defaultMessage) => {
-    if (response.ok) return response;
-    let errorText = defaultMessage;
-    try {
-      const data = await response.json();
-      errorText = data.error || data.message || data.details?.message || data.details?._server_messages || defaultMessage;
-    } catch (parseError) {
-      // ignore parse errors
-    }
-    throw new Error(errorText);
+  // Status colors matching production standards
+  const getStatusColor = (status) => {
+    const colors = {
+      'Completed': '#16a34a',
+      'In Progress': '#ea580c',
+      'Work In Progress': '#ea580c',
+      'Open': '#2563eb',
+      'Not Started': '#0284c7',
+      'On Hold': '#dc2626',
+      'Cancelled': '#64748b'
+    };
+    return colors[status] || '#2563eb';
   };
 
-  const handleEventDrop = async (info) => {
-    const { event } = info;
-    const { type, docName } = event.extendedProps || {};
-    console.log('Event dropped:', { id: event.id, title: event.title, type, docName, start: event.start, end: event.end });
+  const getStatusColorWO = (status) => {
+    const colors = {
+      'Completed': '#16a34a',
+      'In Process': '#ea580c',
+      'In Progress': '#ea580c',
+      'Submitted': '#7c3aed',
+      'Not Started': '#0284c7',
+      'Draft': '#64748b',
+      'Stopped': '#dc2626',
+      'Cancelled': '#475569'
+    };
+    return colors[status] || '#7c3aed';
+  };
 
+  const formatDateTimeLocal = (date) => {
+    if (!date) return null;
+    const d = date instanceof Date ? date : new Date(date);
+    const pad = (v) => String(v).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  };
+
+  const formatDateLocal = (date) => {
+    if (!date) return null;
+    const d = date instanceof Date ? date : new Date(date);
+    const pad = (v) => String(v).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
+
+  // Reschedule API caller
+  const rescheduleEvent = async (eventObj, newStart, newEnd, newWorkstation) => {
+    const type = eventObj.extendedProps?.type;
+    const docName = eventObj.extendedProps?.docName;
+    if (!type || !docName) throw new Error('Invalid event data');
+
+    setSyncing(true);
     try {
       if (type === 'jobcard') {
+        const body = {
+          from_time: formatDateTimeLocal(newStart),
+          to_time: formatDateTimeLocal(newEnd)
+        };
+        if (newWorkstation && newWorkstation !== 'Unassigned') {
+          body.workstation = newWorkstation;
+        }
+
         const response = await fetch(`${API_URL}/job-cards/${docName}/reschedule`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            from_time: formatDateTimeLocal(event.start),
-            to_time: formatDateTimeLocal(event.end)
-          })
+          body: JSON.stringify(body)
         });
-        await handleApiResponse(response, 'Failed to reschedule job card');
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.error || errData.message || 'Failed to reschedule Job Card');
+        }
+
+        showToast(`✓ Job Card ${docName} rescheduled to ${newStart.toLocaleDateString()} (${newWorkstation || 'same station'})`);
       } else if (type === 'workorder') {
+        const body = {
+          planned_start_date: formatDateLocal(newStart),
+          planned_end_date: formatDateLocal(newEnd)
+        };
+        if (newWorkstation && newWorkstation !== 'Unassigned') {
+          body.workstation = newWorkstation;
+        }
+
         const response = await fetch(`${API_URL}/work-orders/${docName}/reschedule`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            planned_start_date: formatDateLocal(event.start),
-            planned_end_date: formatDateLocal(event.end)
-          })
+          body: JSON.stringify(body)
         });
-        await handleApiResponse(response, 'Failed to reschedule work order');
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.error || errData.message || 'Failed to reschedule Work Order');
+        }
+
+        showToast(`✓ Work Order ${docName} updated`);
       }
 
       await fetchSchedule();
     } catch (err) {
-      alert(`Error rescheduling: ${err.message}`);
+      console.error('Reschedule error:', err);
+      showToast(`✗ Reschedule failed: ${err.message}`, true);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // FullCalendar event drop handler
+  const handleFullCalendarDrop = async (info) => {
+    const { event } = info;
+    try {
+      await rescheduleEvent(
+        {
+          extendedProps: event.extendedProps
+        },
+        event.start,
+        event.end || event.start,
+        event.extendedProps?.workstation
+      );
+    } catch (err) {
       info.revert();
     }
   };
 
-  // Drag & drop state and handlers for custom workstation-week grid
-  const [dragOverCell, setDragOverCell] = useState(null);
+  // List of all distinct workstations (from backend DB + events)
+  const workstationList = useMemo(() => {
+    const set = new Set();
+    
+    // Add known stations from backend
+    backendWorkstations.forEach(ws => {
+      const name = ws.workstation_name || ws.name;
+      if (name) set.add(name);
+    });
 
+    // Add stations from active events
+    events.forEach(e => {
+      const w = e.extendedProps?.workstation;
+      if (w && w !== 'Unassigned') set.add(w);
+    });
+
+    const list = Array.from(set).sort();
+    const hasUnassigned = events.some(e => e.extendedProps?.workstation === 'Unassigned' || !e.extendedProps?.workstation);
+    if (hasUnassigned || list.length === 0) {
+      list.push('Unassigned');
+    }
+    return list;
+  }, [backendWorkstations, events]);
+
+  // Generate all days in the currently selected month
+  const monthDays = useMemo(() => {
+    const year = activeDate.getFullYear();
+    const month = activeDate.getMonth();
+    const totalDays = new Date(year, month + 1, 0).getDate();
+    
+    const days = [];
+    for (let day = 1; day <= totalDays; day++) {
+      const d = new Date(year, month, day, 0, 0, 0, 0);
+      days.push(d);
+    }
+    return days;
+  }, [activeDate]);
+
+  // Helper to compute ISO Week Number
+  const getISOWeekNumber = (d) => {
+    const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const dayNum = date.getUTCDay() || 7;
+    date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+    return Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+  };
+
+  // Group month days by Week for the top tier header
+  const weekGroups = useMemo(() => {
+    const groups = [];
+    let currentWeekNum = null;
+    let currentDays = [];
+
+    monthDays.forEach(day => {
+      const weekNum = getISOWeekNumber(day);
+      if (currentWeekNum === null) {
+        currentWeekNum = weekNum;
+        currentDays = [day];
+      } else if (currentWeekNum === weekNum) {
+        currentDays.push(day);
+      } else {
+        groups.push({
+          weekNumber: currentWeekNum,
+          label: `WEEK ${currentWeekNum}`,
+          days: currentDays,
+          colSpan: currentDays.length
+        });
+        currentWeekNum = weekNum;
+        currentDays = [day];
+      }
+    });
+
+    if (currentDays.length > 0) {
+      groups.push({
+        weekNumber: currentWeekNum,
+        label: `WEEK ${currentWeekNum}`,
+        days: currentDays,
+        colSpan: currentDays.length
+      });
+    }
+
+    return groups;
+  }, [monthDays]);
+
+  // Check if an event falls on a particular date
+  const eventIntersectsDay = (ev, day) => {
+    if (!ev || !ev.start) return false;
+    const s = ev.start instanceof Date ? ev.start : new Date(ev.start);
+    let en = ev.end ? (ev.end instanceof Date ? ev.end : new Date(ev.end)) : s;
+    if (isNaN(s.getTime())) return false;
+    if (isNaN(en.getTime())) en = s;
+
+    const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, 0, 0, 0);
+    const dayEnd = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23, 59, 59, 999);
+
+    return s <= dayEnd && en >= dayStart;
+  };
+
+  // Filtered events
+  const filteredEvents = useMemo(() => {
+    return events.filter(e => {
+      // Type filter
+      if (viewFilter !== 'all' && e.extendedProps?.type !== viewFilter) {
+        return false;
+      }
+      // Status filter
+      if (statusFilter !== 'all' && (e.extendedProps?.status || '').toLowerCase() !== statusFilter.toLowerCase()) {
+        return false;
+      }
+      // Search query
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase();
+        const title = (e.title || '').toLowerCase();
+        const item = (e.extendedProps?.itemCode || '').toLowerCase();
+        const wo = (e.extendedProps?.workOrder || '').toLowerCase();
+        const doc = (e.extendedProps?.docName || '').toLowerCase();
+        const op = (e.extendedProps?.operation || '').toLowerCase();
+        const ws = (e.extendedProps?.workstation || '').toLowerCase();
+        if (!title.includes(query) && !item.includes(query) && !wo.includes(query) && !doc.includes(query) && !op.includes(query) && !ws.includes(query)) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [events, viewFilter, statusFilter, searchQuery]);
+
+  // Zoom handlers
+  const handleZoomIn = () => setZoomIndex(i => Math.min(ZOOM_LEVELS.length - 1, i + 1));
+  const handleZoomOut = () => setZoomIndex(i => Math.max(0, i - 1));
+
+  const currentZoom = ZOOM_LEVELS[zoomIndex];
+
+  // Month navigation
+  const prevMonth = () => {
+    setActiveDate(d => new Date(d.getFullYear(), d.getMonth() - 1, 1));
+  };
+  const nextMonth = () => {
+    setActiveDate(d => new Date(d.getFullYear(), d.getMonth() + 1, 1));
+  };
+  const goToToday = () => {
+    setActiveDate(new Date());
+  };
+
+  // Drag and Drop handlers for Matrix
   const handleDragStart = (e, ev) => {
+    setDraggedEvent(ev);
     try {
       e.dataTransfer.setData('text/plain', JSON.stringify({ id: ev.id }));
       e.dataTransfer.effectAllowed = 'move';
@@ -142,303 +422,408 @@ const Scheduler = () => {
     }
   };
 
-  const handleCellDragOver = (e) => {
+  const handleDragEnd = () => {
+    setDraggedEvent(null);
+    setDragOverCell(null);
+  };
+
+  const handleCellDragOver = (e, cellKey) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+    if (dragOverCell !== cellKey) {
+      setDragOverCell(cellKey);
+    }
   };
 
-  const handleCellDrop = async (e, targetDate, targetWs) => {
+  const handleCellDragLeave = (e, cellKey) => {
+    if (dragOverCell === cellKey) {
+      setDragOverCell(null);
+    }
+  };
+
+  const handleCellDrop = async (e, targetDate, targetWorkstation) => {
     e.preventDefault();
     setDragOverCell(null);
-    try {
-      const raw = e.dataTransfer.getData('text/plain');
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      const eventId = parsed.id;
-      const ev = events.find(x => x.id === eventId);
-      if (!ev) throw new Error('Event not found');
+    const ev = draggedEvent;
+    if (!ev) return;
 
-      const isAllDay = !!ev.allDay;
-      const origStart = ev.start instanceof Date ? ev.start : new Date(ev.start);
-      const origEnd = ev.end ? (ev.end instanceof Date ? ev.end : new Date(ev.end)) : origStart;
-      const durationMs = Math.max(0, origEnd.getTime() - origStart.getTime());
+    const isAllDay = !!ev.allDay;
+    const origStart = ev.start instanceof Date ? ev.start : new Date(ev.start);
+    const origEnd = ev.end ? (ev.end instanceof Date ? ev.end : new Date(ev.end)) : origStart;
+    const durationMs = Math.max(0, origEnd.getTime() - origStart.getTime());
 
-      let newStart, newEnd;
-      if (isAllDay) {
-        newStart = new Date(targetDate);
-        newStart.setHours(0,0,0,0);
-        newEnd = new Date(newStart);
-      } else {
-        newStart = new Date(targetDate);
-        newStart.setHours(origStart.getHours(), origStart.getMinutes(), origStart.getSeconds(), 0);
-        newEnd = new Date(newStart.getTime() + durationMs);
-      }
-
-      // call appropriate reschedule endpoint
-      await rescheduleEvent(ev, newStart, newEnd, targetWs);
-      await fetchSchedule();
-    } catch (err) {
-      console.error('Drop error', err);
-      alert('Failed to move event: ' + (err.message || err));
-    }
-  };
-
-  const rescheduleEvent = async (eventObj, newStart, newEnd, newWorkstation) => {
-    const type = eventObj.extendedProps?.type;
-    const docName = eventObj.extendedProps?.docName;
-    if (!type || !docName) throw new Error('Invalid event data');
-
-    if (type === 'jobcard') {
-      const body = { from_time: formatDateTimeLocal(newStart), to_time: formatDateTimeLocal(newEnd) };
-      if (newWorkstation) body.workstation = newWorkstation;
-      const response = await fetch(`${API_URL}/job-cards/${docName}/reschedule`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      await handleApiResponse(response, 'Failed to reschedule job card');
-    } else if (type === 'workorder') {
-      const body = { planned_start_date: formatDateLocal(newStart), planned_end_date: formatDateLocal(newEnd) };
-      if (newWorkstation) body.workstation = newWorkstation;
-      const response = await fetch(`${API_URL}/work-orders/${docName}/reschedule`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      await handleApiResponse(response, 'Failed to reschedule work order');
+    let newStart, newEnd;
+    if (isAllDay) {
+      newStart = new Date(targetDate);
+      newStart.setHours(0, 0, 0, 0);
+      newEnd = new Date(newStart.getTime() + (durationMs || 86400000));
     } else {
-      throw new Error('Unknown event type');
+      newStart = new Date(targetDate);
+      newStart.setHours(origStart.getHours(), origStart.getMinutes(), origStart.getSeconds(), 0);
+      newEnd = new Date(newStart.getTime() + durationMs);
     }
+
+    await rescheduleEvent(ev, newStart, newEnd, targetWorkstation);
+    setDraggedEvent(null);
   };
 
-  // Determine color based on Job Card status
-  const getStatusColor = (status) => {
-    const colors = {
-      'Not Started': '#3498db',
-      'In Progress': '#f39c12',
-      'Completed': '#27ae60',
-      'On Hold': '#e74c3c',
-      'Open': '#95a5a6'
-    };
-    return colors[status] || '#3498db';
+  const openDoc = (type, docName) => {
+    const docType = type === 'jobcard' ? 'job-card' : 'work-order';
+    window.open(`http://localhost:8080/app/${docType}/${docName}`, '_blank');
   };
 
-  const formatDateTimeLocal = (date) => {
-    if (!date) return null;
-    const pad = (value) => String(value).padStart(2, '0');
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-  };
-
-  const formatDateLocal = (date) => {
-    if (!date) return null;
-    const pad = (value) => String(value).padStart(2, '0');
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-  };
-
-  // Determine color based on Work Order status
-  const getStatusColorWO = (status) => {
-    const colors = {
-      'Draft': '#bdc3c7',
-      'Submitted': '#9b59b6',
-      'In Progress': '#f39c12',
-      'Completed': '#27ae60',
-      'Cancelled': '#e74c3c'
-    };
-    return colors[status] || '#3498db';
-  };
-
-  const workstations = useMemo(() => {
-    const s = new Set();
-    events.forEach(e => {
-      const w = e.extendedProps?.workstation || 'Unassigned';
-      s.add(w);
-    });
-    return Array.from(s);
-  }, [events]);
-
-  const formatWeekTitle = (date) => {
-    const start = new Date(date);
-    // find start of week (Monday)
-    const day = start.getDay();
-    const diff = (day === 0 ? -6 : 1) - day; // make Monday the first day
-    start.setDate(start.getDate() + diff);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-    const opts = { month: 'short', day: 'numeric' };
-    return `${start.toLocaleDateString(undefined, opts)} - ${end.toLocaleDateString(undefined, opts)}`;
-  };
-
-  const getWeekDays = (date) => {
-    const start = new Date(date);
-    const day = start.getDay();
-    const diff = (day === 0 ? -6 : 1) - day; // Monday start
-    start.setDate(start.getDate() + diff);
-    start.setHours(0,0,0,0);
-    return Array.from({ length: 7 }).map((_, i) => {
-      const d = new Date(start);
-      d.setDate(start.getDate() + i);
-      d.setHours(0,0,0,0);
-      return d;
-    });
-  };
-
-  const eventIntersectsDay = (ev, day) => {
-    if (!ev) return false;
-    const s = ev.start instanceof Date ? ev.start : new Date(ev.start);
-    let en = ev.end ? (ev.end instanceof Date ? ev.end : new Date(ev.end)) : s;
-    // normalize times
-    const dayStart = new Date(day); dayStart.setHours(0,0,0,0);
-    const dayEnd = new Date(day); dayEnd.setHours(23,59,59,999);
-    return s <= dayEnd && en >= dayStart;
-  };
-
-  if (loading) return <div className="scheduler-loading">Loading schedule...</div>;
+  const monthTitle = activeDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toUpperCase();
 
   return (
-    <div className="scheduler-container">
-      <div className="scheduler-header">
-        <h1>Production Scheduler</h1>
-        <div className="scheduler-actions">
-          <button onClick={() => setViewFilter('all')} className={viewFilter === 'all' ? 'btn-active' : ''}>
-            All
+    <div className="scheduler-app-root">
+      {/* Top Application Bar */}
+      <header className="production-header">
+        <div className="header-left">
+          <div className="logo-badge">PROD</div>
+          <div>
+            <h1 className="header-title">MONTHLY PRODUCTION SCHEDULE</h1>
+            <div className="header-subtitle">ERPNext v16 Interactive Work Order & Job Card Scheduler</div>
+          </div>
+        </div>
+
+        {/* View Tabs */}
+        <div className="tab-buttons">
+          <button
+            className={`tab-btn ${activeTab === 'matrix' ? 'active' : ''}`}
+            onClick={() => setActiveTab('matrix')}
+          >
+            📊 Workstation Matrix (Month)
           </button>
-          {/* Work Orders are displayed under Job Cards; standalone Work Orders hidden */}
-          <button onClick={() => setViewFilter('jobcard')} className={viewFilter === 'jobcard' ? 'btn-active' : ''}>
-            Job Cards
-          </button>
-          <button onClick={fetchSchedule} className="btn-refresh">
-            Refresh
-          </button>
-          <button onClick={() => setShowWorkstationWeek(s => !s)} className={showWorkstationWeek ? 'btn-active' : ''}>
-            Workstation Week
+          <button
+            className={`tab-btn ${activeTab === 'calendar' ? 'active' : ''}`}
+            onClick={() => setActiveTab('calendar')}
+          >
+            📅 Calendar View
           </button>
         </div>
-      </div>
 
-      {error && <div className="scheduler-error">Error: {error}</div>}
-
-      <div className="scheduler-info">
-        <p>Drag and drop events to reschedule Job Cards and Work Orders</p>
-        <div className="legend">
-          <span><span className="legend-box" style={{ backgroundColor: getStatusColor('Not Started'), border: '1px solid #2c3e50' }}></span> JC: Not Started</span>
-          <span><span className="legend-box" style={{ backgroundColor: getStatusColor('In Progress'), border: '1px solid #2c3e50' }}></span> JC: In Progress</span>
-          <span><span className="legend-box" style={{ backgroundColor: getStatusColor('Completed'), border: '1px solid #2c3e50' }}></span> JC: Completed</span>
-          <span><span className="legend-box" style={{ backgroundColor: getStatusColorWO('Draft'), border: '1px solid #34495e' }}></span> WO: Not Started</span>
+        <div className="header-right">
+          <button onClick={fetchSchedule} className="btn-action btn-refresh" disabled={loading || syncing} title="Refresh data from ERPNext">
+            <span className={loading || syncing ? 'spin' : ''}>🔄</span> {loading ? 'Loading...' : syncing ? 'Saving...' : 'Sync ERPNext'}
+          </button>
         </div>
-      </div>
+      </header>
 
-      <div className="calendar-wrapper">
-        {!showWorkstationWeek && (
-          <FullCalendar
-            ref={calendarRef}
-            plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-            initialView="dayGridMonth"
-            headerToolbar={{
-              left: 'prev,next today',
-              center: 'title',
-              right: 'dayGridMonth,timeGridWeek,timeGridDay'
-            }}
-            events={events.filter((event) => {
-              if (viewFilter === 'all') return true;
-              return event.extendedProps?.type === viewFilter;
-            })}
-            editable={true}
-            eventDrop={handleEventDrop}
-            eventResize={handleEventDrop}
-            eventDisplay="block"
-            height="auto"
-            dateClick={(info) => {
-              const calendarApi = calendarRef.current.getApi();
-              calendarApi.changeView('timeGridDay', info.date);
-            }}
-            eventClick={(info) => {
-              const docType = info.event.extendedProps.type === 'jobcard' ? 'job-card' : 'work-order';
-              window.open(`http://localhost:8080/app/${docType}/${info.event.extendedProps.docName}`, '_blank');
-            }}
-          />
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className={`scheduler-toast ${toastMessage.isError ? 'error' : 'success'}`}>
+          {toastMessage.text}
+        </div>
+      )}
+
+      {error && <div className="scheduler-error-banner">⚠️ Connection Error: {error}</div>}
+
+      {/* Control & Toolbar Bar */}
+      <div className="scheduler-toolbar">
+        {/* Month Navigation (For Matrix View) */}
+        {activeTab === 'matrix' && (
+          <div className="month-nav-group">
+            <button className="btn-nav" onClick={prevMonth} title="Previous Month">◀</button>
+            <button className="btn-nav btn-today" onClick={goToToday}>Today</button>
+            <button className="btn-nav" onClick={nextMonth} title="Next Month">▶</button>
+            <div className="current-month-display">{monthTitle}</div>
+          </div>
         )}
 
-        {showWorkstationWeek && (
-          <div className="ws-grid">
-            <div className="ws-controls">
-                <button onClick={() => setActiveDate(d => { const nd = new Date(d); nd.setDate(nd.getDate() - 7); return nd; })}>&lt;</button>
-                <button onClick={() => setActiveDate(new Date())}>Today</button>
-                <button onClick={() => setActiveDate(d => { const nd = new Date(d); nd.setDate(nd.getDate() + 7); return nd; })}>&gt;</button>
-                <div className="ws-week-title">{formatWeekTitle(activeDate)}</div>
-              </div>
-            <div className="ws-name-col">Workstation</div>
-            <div className="ws-date-row">
-              <div className="ws-date-col">
-                <div className="ws-date-grid">
-                  {(() => {
-                    const days = [];
-                    const start = new Date(activeDate);
-                    const day = start.getDay();
-                    const diff = (day === 0 ? -6 : 1) - day; // Monday start
-                    start.setDate(start.getDate() + diff);
-                    for (let i = 0; i < 7; i++) {
-                      const d = new Date(start);
-                      d.setDate(start.getDate() + i);
-                      days.push(d);
-                    }
-                    return days.map(d => (
-                      <div key={d.toISOString()} className="ws-date-cell">
-                        <div className="ws-date-day">{d.toLocaleDateString(undefined, { weekday: 'short' })}</div>
-                        <div className="ws-date-num">{d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div>
-                      </div>
-                    ));
-                  })()}
-                </div>
-              </div>
-            </div>
+        {/* Search & Filters */}
+        <div className="filters-group">
+          <div className="search-box">
+            <span className="search-icon">🔍</span>
+            <input
+              type="text"
+              placeholder="Search Item, WO, Station, Operation..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <button className="clear-search" onClick={() => setSearchQuery('')}>×</button>
+            )}
+          </div>
 
-            {/* Single shared date header row */}
-            
+          <select
+            className="select-filter"
+            value={viewFilter}
+            onChange={(e) => setViewFilter(e.target.value)}
+          >
+            <option value="all">All Documents</option>
+            <option value="jobcard">Job Cards Only</option>
+            <option value="workorder">Work Orders Only</option>
+          </select>
 
-            {(() => {
-              const days = getWeekDays(activeDate);
-              return workstations.map((ws) => (
-                <div className="ws-row" key={ws}>
-                  <div className="ws-name-col">{ws}</div>
-                  <div className="ws-row-grid">
-                    {days.map(d => {
-                      const cellEvents = events.filter(e => {
-                        const matchesType = viewFilter === 'all' ? true : e.extendedProps?.type === viewFilter;
-                        const evtWs = e.extendedProps?.workstation || 'Unassigned';
-                        return matchesType && evtWs === ws && eventIntersectsDay(e, d);
-                      });
-                      const cellKey = `${ws}::${d.toISOString()}`;
-                      return (
-                        <div
-                          className={`ws-cell ${dragOverCell === cellKey ? 'drag-over' : ''}`}
-                          key={d.toISOString()}
-                          onDragOver={handleCellDragOver}
-                          onDragEnter={() => setDragOverCell(cellKey)}
-                          onDragLeave={() => setDragOverCell(null)}
-                          onDrop={(e) => handleCellDrop(e, d, ws)}
-                        >
-                          {cellEvents.map(ev => (
-                            <div
-                              key={ev.id}
-                              className="ws-event"
-                              draggable
-                              onDragStart={(e) => handleDragStart(e, ev)}
-                              style={{ backgroundColor: ev.backgroundColor || '#3498db', border: `1px solid ${ev.borderColor || '#2c3e50'}` }}
-                              onClick={() => window.open(`http://localhost:8080/app/${ev.extendedProps.type === 'jobcard' ? 'job-card' : 'work-order'}/${ev.extendedProps.docName}`, '_blank')}
-                            >
-                              {ev.title}
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ));
-            })()}
+          <select
+            className="select-filter"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+          >
+            <option value="all">All Statuses</option>
+            <option value="not started">Not Started / Open</option>
+            <option value="in progress">In Progress</option>
+            <option value="completed">Completed</option>
+          </select>
+        </div>
+
+        {/* Zoom Controls (For Matrix View) */}
+        {activeTab === 'matrix' && (
+          <div className="zoom-controls">
+            <span className="zoom-label">Zoom:</span>
+            <button
+              className="btn-zoom"
+              onClick={handleZoomOut}
+              disabled={zoomIndex === 0}
+              title="Zoom Out (Fit more days)"
+            >
+              −
+            </button>
+            <span className="zoom-level-badge">{currentZoom.label} ({currentZoom.dayWidth}px)</span>
+            <button
+              className="btn-zoom"
+              onClick={handleZoomIn}
+              disabled={zoomIndex === ZOOM_LEVELS.length - 1}
+              title="Zoom In (More details)"
+            >
+              +
+            </button>
           </div>
         )}
       </div>
+
+      {/* Main Content Area */}
+      <main className="scheduler-main-view">
+        {/* ================= WORKSTATION MONTH MATRIX VIEW ================= */}
+        {activeTab === 'matrix' && (
+          <div className="matrix-viewport" ref={matrixScrollRef}>
+            <div className="matrix-table-container">
+              <table className="matrix-table">
+                {/* Two-tier Table Header */}
+                <thead>
+                  {/* Top Tier: Title and Week Numbers */}
+                  <tr className="header-row-weeks">
+                    <th className="th-station-sticky">
+                      <div className="station-header-box">
+                        <span className="station-th-title">MACHINE / STATION</span>
+                        <span className="station-count-badge">{workstationList.length} Stations</span>
+                      </div>
+                    </th>
+                    {weekGroups.map((group, idx) => (
+                      <th
+                        key={`week-${group.weekNumber}-${idx}`}
+                        colSpan={group.colSpan}
+                        className="th-week-group"
+                      >
+                        <div className="week-label-wrapper">
+                          <span className="week-label-text">{group.label}</span>
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+
+                  {/* Bottom Tier: Individual Days of Month */}
+                  <tr className="header-row-days">
+                    <th className="th-station-sticky-sub">
+                      <div className="station-sub-label">Station Name</div>
+                    </th>
+                    {monthDays.map(day => {
+                      const dayOfWeek = day.getDay(); // 0 is Sunday, 6 is Saturday
+                      const isSunday = dayOfWeek === 0;
+                      const isSaturday = dayOfWeek === 6;
+                      const dayNum = day.getDate();
+                      const monthShort = day.toLocaleDateString('en-US', { month: 'short' });
+                      const weekdayShort = day.toLocaleDateString('en-US', { weekday: 'short' });
+                      const isToday = new Date().toDateString() === day.toDateString();
+
+                      return (
+                        <th
+                          key={day.toISOString()}
+                          style={{ width: `${currentZoom.dayWidth}px`, minWidth: `${currentZoom.dayWidth}px` }}
+                          className={`th-day-cell ${isSunday ? 'col-sunday' : ''} ${isSaturday ? 'col-saturday' : ''} ${isToday ? 'col-today' : ''}`}
+                        >
+                          <div className="day-header-content">
+                            <span className="day-date-str">{dayNum}-{monthShort}</span>
+                            <span className="day-weekday-str">{isSunday ? '###' : weekdayShort}</span>
+                          </div>
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+
+                {/* Table Body: Station Rows */}
+                <tbody>
+                  {workstationList.map((stationName) => {
+                    // Count total events for this station in this month
+                    const stationMonthEvents = filteredEvents.filter(e => {
+                      const ws = e.extendedProps?.workstation || 'Unassigned';
+                      if (ws !== stationName) return false;
+                      return monthDays.some(d => eventIntersectsDay(e, d));
+                    });
+
+                    return (
+                      <tr key={stationName} className="matrix-row">
+                        {/* Left Fixed Station Header */}
+                        <td className="td-station-sticky">
+                          <div className="station-cell-content">
+                            <div className="station-name-text" title={stationName}>
+                              {stationName}
+                            </div>
+                            {stationMonthEvents.length > 0 && (
+                              <span className="station-event-count" title={`${stationMonthEvents.length} scheduled jobs this month`}>
+                                {stationMonthEvents.length}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Month Day Cells */}
+                        {monthDays.map(day => {
+                          const dayOfWeek = day.getDay();
+                          const isSunday = dayOfWeek === 0;
+                          const isSaturday = dayOfWeek === 6;
+                          const cellKey = `${stationName}::${day.toISOString()}`;
+                          const isDragOver = dragOverCell === cellKey;
+
+                          // Find all events for this station that fall on this day
+                          const cellEvents = filteredEvents.filter(e => {
+                            const ws = e.extendedProps?.workstation || 'Unassigned';
+                            if (ws !== stationName) return false;
+                            return eventIntersectsDay(e, day);
+                          });
+
+                          return (
+                            <td
+                              key={day.toISOString()}
+                              style={{ width: `${currentZoom.dayWidth}px`, minWidth: `${currentZoom.dayWidth}px` }}
+                              className={`matrix-day-cell ${isSunday ? 'col-sunday-cell' : ''} ${isSaturday ? 'col-saturday-cell' : ''} ${isDragOver ? 'cell-drag-over' : ''}`}
+                              onDragOver={(e) => handleCellDragOver(e, cellKey)}
+                              onDragLeave={(e) => handleCellDragLeave(e, cellKey)}
+                              onDrop={(e) => handleCellDrop(e, day, stationName)}
+                            >
+                              <div className="cell-events-container">
+                                {cellEvents.map(ev => {
+                                  const ext = ev.extendedProps || {};
+                                  const itemCode = ext.itemCode || ext.raw?.production_item || ext.docName;
+                                  const qty = ext.qty || ext.raw?.for_quantity || ext.raw?.qty;
+                                  const isJobCard = ext.type === 'jobcard';
+
+                                  return (
+                                    <div
+                                      key={ev.id}
+                                      draggable
+                                      onDragStart={(e) => handleDragStart(e, ev)}
+                                      onDragEnd={handleDragEnd}
+                                      onClick={() => openDoc(ext.type, ext.docName)}
+                                      className={`prod-card ${isJobCard ? 'card-jobcard' : 'card-workorder'}`}
+                                      style={{ borderLeftColor: ev.backgroundColor || '#2563eb' }}
+                                      title={`[${ext.type.toUpperCase()}] ${ext.docName}\nItem: ${itemCode}\nQty: ${qty}\nOperation: ${ext.operation || 'N/A'}\nStatus: ${ext.status}\nWork Order: ${ext.workOrder || 'N/A'}\nTime: ${ev.start ? ev.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''} - ${ev.end ? ev.end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}\n\n👉 Click to open in ERPNext\n👉 Drag to reschedule`}
+                                    >
+                                      {/* Primary Row: Item Code & Quantity in Red */}
+                                      <div className="prod-card-main">
+                                        <span className="prod-item-code">{itemCode}</span>
+                                        {qty !== undefined && qty !== null && qty !== '' && (
+                                          <span className="prod-qty-badge"> : {qty}</span>
+                                        )}
+                                      </div>
+
+                                      {/* Secondary Details (visible at higher zoom) */}
+                                      {currentZoom.dayWidth >= 90 && (
+                                        <div className="prod-card-sub">
+                                          {ext.operation && (
+                                            <span className="prod-op-tag">{ext.operation}</span>
+                                          )}
+                                          {ext.workOrder && currentZoom.dayWidth >= 140 && (
+                                            <span className="prod-wo-tag">{ext.workOrder.replace('MFG-WO-2026-', 'WO-')}</span>
+                                          )}
+                                        </div>
+                                      )}
+
+                                      {/* Status dot */}
+                                      <span
+                                        className="prod-status-dot"
+                                        style={{ backgroundColor: ev.backgroundColor }}
+                                      />
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ================= CALENDAR VIEW (FULLCALENDAR) ================= */}
+        {activeTab === 'calendar' && (
+          <div className="fullcalendar-wrapper">
+            <FullCalendar
+              ref={calendarRef}
+              plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+              initialView="dayGridMonth"
+              headerToolbar={{
+                left: 'prev,next today',
+                center: 'title',
+                right: 'dayGridMonth,timeGridWeek,timeGridDay'
+              }}
+              events={filteredEvents}
+              editable={true}
+              eventDrop={handleFullCalendarDrop}
+              eventResize={handleFullCalendarDrop}
+              eventDisplay="block"
+              height="auto"
+              dateClick={(info) => {
+                const calendarApi = calendarRef.current.getApi();
+                calendarApi.changeView('timeGridDay', info.date);
+              }}
+              eventClick={(info) => {
+                const ext = info.event.extendedProps;
+                openDoc(ext.type, ext.docName);
+              }}
+            />
+          </div>
+        )}
+      </main>
+
+      {/* Legend & Instructions Footer */}
+      <footer className="scheduler-footer">
+        <div className="footer-left">
+          <span className="footer-legend-title">Legend:</span>
+          <div className="legend-items">
+            <span className="legend-item">
+              <span className="legend-dot" style={{ backgroundColor: getStatusColor('Not Started') }}></span>
+              Not Started / Open
+            </span>
+            <span className="legend-item">
+              <span className="legend-dot" style={{ backgroundColor: getStatusColor('In Progress') }}></span>
+              In Progress
+            </span>
+            <span className="legend-item">
+              <span className="legend-dot" style={{ backgroundColor: getStatusColor('Completed') }}></span>
+              Completed
+            </span>
+            <span className="legend-item">
+              <span className="legend-dot" style={{ backgroundColor: getStatusColorWO('Submitted') }}></span>
+              Work Order Submitted
+            </span>
+            <span className="legend-item">
+              <span className="legend-box-sun"></span>
+              Sunday / Weekend Divider
+            </span>
+          </div>
+        </div>
+
+        <div className="footer-right">
+          💡 <strong>Tip:</strong> Drag any card horizontally to change dates, or vertically to transfer between workstations. Changes immediately save to ERPNext.
+        </div>
+      </footer>
     </div>
   );
 };
