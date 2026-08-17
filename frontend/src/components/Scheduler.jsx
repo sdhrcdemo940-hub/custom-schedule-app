@@ -25,7 +25,10 @@ const Scheduler = () => {
   const [error, setError] = useState(null);
 
   // Active view: 'matrix' (Monthly Production Schedule) or 'calendar' (FullCalendar)
-  const [activeTab, setActiveTab] = useState('matrix');
+  const [activeTab, setActiveTab] = useState(() => {
+    const saved = localStorage.getItem('scheduler_active_tab');
+    return (saved === 'calendar' || saved === 'matrix') ? saved : 'matrix';
+  });
   const [viewFilter, setViewFilter] = useState('all'); // 'all', 'jobcard', 'workorder'
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -39,11 +42,31 @@ const Scheduler = () => {
     return d;
   });
 
-  const [zoomIndex, setZoomIndex] = useState(1); // Default to Standard (90px)
+  const [zoomIndex, setZoomIndex] = useState(() => {
+    const saved = localStorage.getItem('scheduler_zoom_index');
+    const parsed = parseInt(saved, 10);
+    return !isNaN(parsed) && parsed >= 0 && parsed < ZOOM_LEVELS.length ? parsed : 1;
+  });
   const [draggedEvent, setDraggedEvent] = useState(null);
   const [dragOverCell, setDragOverCell] = useState(null);
 
   const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3500/api';
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('scheduler_active_tab', activeTab);
+    } catch (e) {
+      console.error('Failed to save activeTab to localStorage', e);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('scheduler_zoom_index', zoomIndex);
+    } catch (e) {
+      console.error('Failed to save zoomIndex to localStorage', e);
+    }
+  }, [zoomIndex]);
 
   useEffect(() => {
     fetchSchedule();
@@ -88,7 +111,7 @@ const Scheduler = () => {
 
         return {
           id: `jc-${jc.name}`,
-          title: `${itemCode ? itemCode + ' : ' : ''}${qty ? qty + ' ' : ''}${jc.subject || jc.name}`,
+          title: `JC: ${jc.name}${itemCode ? ' | ' + itemCode : ''}${qty ? ' : ' + qty : ''}${operation ? ' (' + operation + ')' : ''}`,
           start: startTime,
           end: endTime,
           allDay: false,
@@ -123,7 +146,7 @@ const Scheduler = () => {
 
             workOrderEvents.push({
               id: `wo-${wo.name}-op-${op.name || opIdx}`,
-              title: `WO: ${itemCode ? itemCode + ' : ' : ''}${qty ? qty + ' ' : ''}${wo.name} (${op.operation || 'Op'})`,
+              title: `WO: ${wo.name}${itemCode ? ' | ' + itemCode : ''}${qty ? ' : ' + qty : ''}${op.operation ? ' (' + op.operation + ')' : ''}`,
               start: startTime,
               end: endTime,
               allDay: false,
@@ -150,7 +173,7 @@ const Scheduler = () => {
 
           workOrderEvents.push({
             id: `wo-${wo.name}`,
-            title: `WO: ${itemCode ? itemCode + ' : ' : ''}${qty ? qty + ' ' : ''}${wo.name}`,
+            title: `WO: ${wo.name}${itemCode ? ' | ' + itemCode : ''}${qty ? ' : ' + qty : ''}`,
             start: startTime,
             end: endTime,
             allDay: true,
@@ -786,6 +809,13 @@ const Scheduler = () => {
                                       style={{ borderLeftColor: ev.backgroundColor || '#2563eb' }}
                                       title={`[${ext.type.toUpperCase()}] ${ext.docName}\nItem: ${itemCode}\nQty: ${qty}\nOperation: ${ext.operation || 'N/A'}\nStatus: ${ext.status}\nWork Order: ${ext.workOrder || 'N/A'}\nTime: ${ev.start ? ev.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''} - ${ev.end ? ev.end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}\n\n👉 Click to open in ERPNext\n👉 Drag to reschedule`}
                                     >
+                                      {/* Full WO or JC Document Name Row */}
+                                      <div className="prod-card-id-row">
+                                        <span className={`prod-doc-id-badge ${isJobCard ? 'badge-jc' : 'badge-wo'}`}>
+                                          {isJobCard ? `JC: ${ext.docName}` : `WO: ${ext.docName}`}
+                                        </span>
+                                      </div>
+
                                       {/* Primary Row: Item Code & Quantity in Red */}
                                       <div className="prod-card-main">
                                         <span className="prod-item-code">{itemCode}</span>
@@ -794,14 +824,14 @@ const Scheduler = () => {
                                         )}
                                       </div>
 
-                                      {/* Secondary Details (visible at higher zoom) */}
-                                      {currentZoom.dayWidth >= 90 && (
+                                      {/* Secondary Details: Operation & Parent Work Order */}
+                                      {(ext.operation || (isJobCard && ext.workOrder)) && (
                                         <div className="prod-card-sub">
                                           {ext.operation && (
                                             <span className="prod-op-tag">{ext.operation}</span>
                                           )}
-                                          {ext.workOrder && currentZoom.dayWidth >= 140 && (
-                                            <span className="prod-wo-tag">{ext.workOrder.replace('MFG-WO-2026-', 'WO-')}</span>
+                                          {isJobCard && ext.workOrder && (
+                                            <span className="prod-parent-wo-tag">WO: {ext.workOrder}</span>
                                           )}
                                         </div>
                                       )}

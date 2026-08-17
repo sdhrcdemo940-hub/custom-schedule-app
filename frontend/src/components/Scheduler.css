@@ -674,13 +674,18 @@ body {
   background-color: #ffffff;
   border: 1px solid #cbd5e1;
   border-left-width: 4px;
-  border-radius: 3px;
-  padding: 3px 5px;
+  border-radius: 4px;
+  padding: 4px 6px;
   cursor: grab;
   position: relative;
   box-shadow: 0 1px 2px rgba(0,0,0,0.06);
   transition: all 0.15s ease;
   user-select: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  overflow: visible;
 }
 
 .prod-card:hover {
@@ -695,18 +700,59 @@ body {
   opacity: 0.8;
 }
 
+/* Full Document Name Row */
+.prod-card-id-row {
+  display: flex;
+  align-items: flex-start;
+  padding-right: 10px; /* space for status dot */
+  min-width: 0;
+  width: 100%;
+}
+
+.prod-doc-id-badge {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 5px;
+  border-radius: 3px;
+  line-height: 1.25;
+  white-space: normal;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.prod-doc-id-badge.badge-jc {
+  background-color: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
+.prod-doc-id-badge.badge-wo {
+  background-color: #eff6ff;
+  color: #1e40af;
+  border: 1px solid #bfdbfe;
+}
+
 .prod-card-main {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
-  line-height: 1.2;
+  line-height: 1.25;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .prod-item-code {
   font-size: 11px;
   font-weight: 800;
   color: #0f172a;
+  white-space: normal;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 /* Highlighted Quantity in Red */
@@ -715,14 +761,16 @@ body {
   font-weight: 800;
   color: var(--qty-red);
   margin-left: 2px;
+  white-space: nowrap;
 }
 
 .prod-card-sub {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 2px;
+  gap: 3px;
+  margin-top: 1px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .prod-op-tag {
@@ -730,9 +778,25 @@ body {
   color: #475569;
   font-size: 9px;
   font-weight: 600;
-  padding: 0 3px;
+  padding: 1px 4px;
   border-radius: 2px;
   border: 1px solid #e2e8f0;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.prod-parent-wo-tag {
+  background-color: #f0fdf4;
+  color: #166534;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 2px;
+  border: 1px solid #bbf7d0;
+  white-space: normal;
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .prod-wo-tag {
@@ -740,18 +804,22 @@ body {
   color: #1d4ed8;
   font-size: 9px;
   font-weight: 600;
-  padding: 0 3px;
+  padding: 1px 4px;
   border-radius: 2px;
   border: 1px solid #bfdbfe;
+  white-space: normal;
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .prod-status-dot {
   position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 6px;
-  height: 6px;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
+  box-shadow: 0 0 2px rgba(0,0,0,0.2);
 }
 
 /* Card type variations */
@@ -817,9 +885,23 @@ body {
 
 .fc-event {
   cursor: pointer;
-  padding: 2px 4px;
+  padding: 3px 5px !important;
   border-radius: 3px;
   font-size: 11px;
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+
+.fc-event-main,
+.fc-event-title,
+.fc-event-title-container,
+.fc-daygrid-event {
+  white-space: normal !important;
+  overflow: visible !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+  line-height: 1.3 !important;
 }
 
 /* ================= FOOTER & LEGEND ================= */
