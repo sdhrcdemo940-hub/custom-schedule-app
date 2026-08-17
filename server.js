@@ -80,16 +80,13 @@ app.get('/api/job-cards/:id', async (req, res) => {
   }
 });
 
-const updateJobCardSchedule = async (jobCardId, from_time, to_time, workstation) => {
+const updateJobCardSchedule = async (jobCardId, from_time, to_time) => {
   // Fetch the Job Card so we can update the scheduled_time_logs child row if present.
   const jobCardResponse = await erpnextAPI.get(`/Job Card/${jobCardId}`);
   const jobCard = jobCardResponse.data.data;
   const scheduledLogs = Array.isArray(jobCard.scheduled_time_logs) ? jobCard.scheduled_time_logs : [];
 
   const payload = {};
-  if (workstation) {
-    payload.workstation = workstation;
-  }
 
   if (scheduledLogs.length > 0) {
     payload.scheduled_time_logs = [
@@ -110,9 +107,9 @@ const updateJobCardSchedule = async (jobCardId, from_time, to_time, workstation)
 // Update Job Card dates (reschedule)
 app.put('/api/job-cards/:id/reschedule', async (req, res) => {
   try {
-    const { from_time, to_time, workstation } = req.body;
+    const { from_time, to_time } = req.body;
     
-    const response = await updateJobCardSchedule(req.params.id, from_time, to_time, workstation);
+    const response = await updateJobCardSchedule(req.params.id, from_time, to_time);
     
     res.json({
       success: true,

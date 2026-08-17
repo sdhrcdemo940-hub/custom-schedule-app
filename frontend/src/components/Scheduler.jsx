@@ -84,7 +84,7 @@ const Scheduler = () => {
         const itemCode = jc.production_item || jc.item_name || '';
         const qty = jc.for_quantity || jc.total_completed_qty || '';
         const operation = jc.operation || '';
-        const station = jc.workstation || jc.workstation_name || jc.workstation_type || 'Unassigned';
+        const station = (jc.workstation || jc.workstation_name || jc.workstation_type || 'Unassigned').trim();
 
         return {
           id: `jc-${jc.name}`,
@@ -108,34 +108,67 @@ const Scheduler = () => {
         };
       });
 
-      // Transform Work Orders
-      const workOrderEvents = (data.workOrders || []).map(wo => {
-        const startTime = parseDateTime(wo.planned_start_date || wo.creation);
-        const endTime = parseDateTime(wo.planned_end_date || wo.planned_start_date || wo.creation);
+      // Transform Work Orders (use operations child table to place each operation at its proper workstation)
+      const workOrderEvents = [];
+      (data.workOrders || []).forEach(wo => {
         const itemCode = wo.production_item || wo.item_name || '';
         const qty = wo.qty || '';
-        const station = wo.workstation || wo.workstation_name || 'Unassigned';
+        const ops = Array.isArray(wo.operations) && wo.operations.length > 0 ? wo.operations : null;
 
-        return {
-          id: `wo-${wo.name}`,
-          title: `WO: ${itemCode ? itemCode + ' : ' : ''}${qty ? qty + ' ' : ''}${wo.name}`,
-          start: startTime,
-          end: endTime,
-          allDay: true,
-          backgroundColor: getStatusColorWO(wo.status),
-          borderColor: '#334155',
-          extendedProps: {
-            type: 'workorder',
-            docName: wo.name,
-            itemCode: itemCode,
-            qty: qty,
-            operation: 'Production',
-            status: wo.status,
-            workOrder: wo.name,
-            workstation: station,
-            raw: wo
-          }
-        };
+        if (ops) {
+          ops.forEach((op, opIdx) => {
+            const startTime = parseDateTime(op.planned_start_time || wo.planned_start_date || wo.creation);
+            const endTime = parseDateTime(op.planned_end_time || op.planned_start_time || wo.planned_end_date || wo.creation);
+            const station = (op.workstation || wo.workstation || 'Unassigned').trim();
+
+            workOrderEvents.push({
+              id: `wo-${wo.name}-op-${op.name || opIdx}`,
+              title: `WO: ${itemCode ? itemCode + ' : ' : ''}${qty ? qty + ' ' : ''}${wo.name} (${op.operation || 'Op'})`,
+              start: startTime,
+              end: endTime,
+              allDay: false,
+              backgroundColor: getStatusColorWO(op.status || wo.status),
+              borderColor: '#334155',
+              extendedProps: {
+                type: 'workorder',
+                docName: wo.name,
+                operationName: op.name,
+                itemCode: itemCode,
+                qty: qty,
+                operation: op.operation || 'Production',
+                status: op.status || wo.status,
+                workOrder: wo.name,
+                workstation: station,
+                raw: wo
+              }
+            });
+          });
+        } else {
+          const startTime = parseDateTime(wo.planned_start_date || wo.creation);
+          const endTime = parseDateTime(wo.planned_end_date || wo.planned_start_date || wo.creation);
+          const station = (wo.workstation || wo.workstation_name || 'Unassigned').trim();
+
+          workOrderEvents.push({
+            id: `wo-${wo.name}`,
+            title: `WO: ${itemCode ? itemCode + ' : ' : ''}${qty ? qty + ' ' : ''}${wo.name}`,
+            start: startTime,
+            end: endTime,
+            allDay: true,
+            backgroundColor: getStatusColorWO(wo.status),
+            borderColor: '#334155',
+            extendedProps: {
+              type: 'workorder',
+              docName: wo.name,
+              itemCode: itemCode,
+              qty: qty,
+              operation: 'Production',
+              status: wo.status,
+              workOrder: wo.name,
+              workstation: station,
+              raw: wo
+            }
+          });
+        }
       });
 
       setEvents([...jobCardEvents, ...workOrderEvents]);
@@ -203,9 +236,7 @@ const Scheduler = () => {
           from_time: formatDateTimeLocal(newStart),
           to_time: formatDateTimeLocal(newEnd)
         };
-        if (newWorkstation && newWorkstation !== 'Unassigned') {
-          body.workstation = newWorkstation;
-        }
+        // Job Cards strictly retain their assigned workstation
 
         const response = await fetch(`${API_URL}/job-cards/${docName}/reschedule`, {
           method: 'PUT',
@@ -218,7 +249,7 @@ const Scheduler = () => {
           throw new Error(errData.error || errData.message || 'Failed to reschedule Job Card');
         }
 
-        showToast(`✓ Job Card ${docName} rescheduled to ${newStart.toLocaleDateString()} (${newWorkstation || 'same station'})`);
+        showToast(`✓ Job Card ${docName} rescheduled to ${newStart.toLocaleDateString()}`);
       } else if (type === 'workorder') {
         const body = {
           planned_start_date: formatDateLocal(newStart),
@@ -274,23 +305,30 @@ const Scheduler = () => {
     
     // Add known stations from backend
     backendWorkstations.forEach(ws => {
-      const name = ws.workstation_name || ws.name;
+      const name = (ws.workstation_name || ws.name || '').trim();
       if (name) set.add(name);
     });
 
     // Add stations from active events
     events.forEach(e => {
-      const w = e.extendedProps?.workstation;
+      const w = (e.extendedProps?.workstation || '').trim();
       if (w && w !== 'Unassigned') set.add(w);
     });
 
     const list = Array.from(set).sort();
-    const hasUnassigned = events.some(e => e.extendedProps?.workstation === 'Unassigned' || !e.extendedProps?.workstation);
-    if (hasUnassigned || list.length === 0) {
+    
+    // Only include Unassigned if there are actually unassigned events matching current filter
+    const hasUnassignedEvents = events.some(e => {
+      const w = (e.extendedProps?.workstation || '').trim();
+      const matchesType = viewFilter === 'all' || e.extendedProps?.type === viewFilter;
+      return matchesType && (!w || w === 'Unassigned');
+    });
+
+    if (hasUnassignedEvents) {
       list.push('Unassigned');
     }
     return list;
-  }, [backendWorkstations, events]);
+  }, [backendWorkstations, events, viewFilter]);
 
   // Generate all days in the currently selected month
   const monthDays = useMemo(() => {
@@ -427,8 +465,22 @@ const Scheduler = () => {
     setDragOverCell(null);
   };
 
-  const handleCellDragOver = (e, cellKey) => {
+  const handleCellDragOver = (e, cellKey, cellStationName) => {
     e.preventDefault();
+    if (!draggedEvent) return;
+
+    const isJobCard = draggedEvent.extendedProps?.type === 'jobcard';
+    const originalWs = (draggedEvent.extendedProps?.workstation || 'Unassigned').trim();
+
+    // If it is a Job Card, do NOT allow drag over other workstation rows
+    if (isJobCard && originalWs !== cellStationName.trim()) {
+      e.dataTransfer.dropEffect = 'none';
+      if (dragOverCell === cellKey) {
+        setDragOverCell(null);
+      }
+      return;
+    }
+
     e.dataTransfer.dropEffect = 'move';
     if (dragOverCell !== cellKey) {
       setDragOverCell(cellKey);
@@ -447,6 +499,16 @@ const Scheduler = () => {
     const ev = draggedEvent;
     if (!ev) return;
 
+    const isJobCard = ev.extendedProps?.type === 'jobcard';
+    const originalWs = (ev.extendedProps?.workstation || 'Unassigned').trim();
+
+    // Prevent dropping Job Cards onto a different workstation
+    if (isJobCard && originalWs !== targetWorkstation.trim()) {
+      showToast(`⚠️ Job Cards cannot change workstation. Please drop onto a date within the '${originalWs}' row.`, true);
+      setDraggedEvent(null);
+      return;
+    }
+
     const isAllDay = !!ev.allDay;
     const origStart = ev.start instanceof Date ? ev.start : new Date(ev.start);
     const origEnd = ev.end ? (ev.end instanceof Date ? ev.end : new Date(ev.end)) : origStart;
@@ -463,7 +525,8 @@ const Scheduler = () => {
       newEnd = new Date(newStart.getTime() + durationMs);
     }
 
-    await rescheduleEvent(ev, newStart, newEnd, targetWorkstation);
+    // Job Cards strictly retain their assigned workstation
+    await rescheduleEvent(ev, newStart, newEnd, originalWs);
     setDraggedEvent(null);
   };
 
@@ -657,13 +720,16 @@ const Scheduler = () => {
                   {workstationList.map((stationName) => {
                     // Count total events for this station in this month
                     const stationMonthEvents = filteredEvents.filter(e => {
-                      const ws = e.extendedProps?.workstation || 'Unassigned';
+                      const ws = (e.extendedProps?.workstation || 'Unassigned').trim();
                       if (ws !== stationName) return false;
                       return monthDays.some(d => eventIntersectsDay(e, d));
                     });
 
+                    const isDraggingThisStation = draggedEvent && draggedEvent.extendedProps?.type === 'jobcard' && (draggedEvent.extendedProps?.workstation || '').trim() === stationName.trim();
+                    const isDraggingOtherStation = draggedEvent && draggedEvent.extendedProps?.type === 'jobcard' && (draggedEvent.extendedProps?.workstation || '').trim() !== stationName.trim();
+
                     return (
-                      <tr key={stationName} className="matrix-row">
+                      <tr key={stationName} className={`matrix-row ${isDraggingThisStation ? 'row-active-drag' : ''} ${isDraggingOtherStation ? 'row-inactive-drag' : ''}`}>
                         {/* Left Fixed Station Header */}
                         <td className="td-station-sticky">
                           <div className="station-cell-content">
@@ -688,7 +754,7 @@ const Scheduler = () => {
 
                           // Find all events for this station that fall on this day
                           const cellEvents = filteredEvents.filter(e => {
-                            const ws = e.extendedProps?.workstation || 'Unassigned';
+                            const ws = (e.extendedProps?.workstation || 'Unassigned').trim();
                             if (ws !== stationName) return false;
                             return eventIntersectsDay(e, day);
                           });
@@ -698,7 +764,7 @@ const Scheduler = () => {
                               key={day.toISOString()}
                               style={{ width: `${currentZoom.dayWidth}px`, minWidth: `${currentZoom.dayWidth}px` }}
                               className={`matrix-day-cell ${isSunday ? 'col-sunday-cell' : ''} ${isSaturday ? 'col-saturday-cell' : ''} ${isDragOver ? 'cell-drag-over' : ''}`}
-                              onDragOver={(e) => handleCellDragOver(e, cellKey)}
+                              onDragOver={(e) => handleCellDragOver(e, cellKey, stationName)}
                               onDragLeave={(e) => handleCellDragLeave(e, cellKey)}
                               onDrop={(e) => handleCellDrop(e, day, stationName)}
                             >
@@ -821,7 +887,7 @@ const Scheduler = () => {
         </div>
 
         <div className="footer-right">
-          💡 <strong>Tip:</strong> Drag any card horizontally to change dates, or vertically to transfer between workstations. Changes immediately save to ERPNext.
+          💡 <strong>Tip:</strong> Drag and drop any card to reschedule production dates. Job Cards strictly maintain their fixed machine/workstation assignments.
         </div>
       </footer>
     </div>

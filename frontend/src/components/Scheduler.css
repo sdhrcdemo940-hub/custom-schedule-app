@@ -558,14 +558,32 @@ body {
   background-color: #1d4ed8 !important;
 }
 
-/* ================= TABLE BODY & STATION ROWS ================= */
-
 .matrix-row {
   height: 80px;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
 }
 
 .matrix-row:hover .td-station-sticky {
   background-color: #e2e8f0;
+}
+
+/* Active and inactive row styling during Job Card dragging */
+.matrix-row.row-active-drag {
+  background-color: #f0fdf4;
+}
+
+.matrix-row.row-active-drag .td-station-sticky {
+  background-color: #dcfce7 !important;
+  border-left: 4px solid #16a34a !important;
+}
+
+.matrix-row.row-inactive-drag {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.matrix-row.row-inactive-drag .matrix-day-cell {
+  cursor: not-allowed;
 }
 
 /* Left Sticky Station Name Column */
