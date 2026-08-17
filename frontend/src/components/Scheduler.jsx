@@ -29,9 +29,15 @@ const Scheduler = () => {
     const saved = localStorage.getItem('scheduler_active_tab');
     return (saved === 'calendar' || saved === 'matrix') ? saved : 'matrix';
   });
-  const [viewFilter, setViewFilter] = useState('all'); // 'all', 'jobcard', 'workorder'
+  const [viewFilter, setViewFilter] = useState(() => {
+    const saved = localStorage.getItem('scheduler_view_filter');
+    return (saved === 'jobcard' || saved === 'workorder' || saved === 'all') ? saved : 'all';
+  });
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState(() => {
+    const saved = localStorage.getItem('scheduler_status_filter');
+    return saved || 'all';
+  });
 
   // Matrix navigation state: active month (defaults to current date, e.g. August 2026)
   const [activeDate, setActiveDate] = useState(() => {
@@ -59,6 +65,22 @@ const Scheduler = () => {
       console.error('Failed to save activeTab to localStorage', e);
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('scheduler_view_filter', viewFilter);
+    } catch (e) {
+      console.error('Failed to save viewFilter to localStorage', e);
+    }
+  }, [viewFilter]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('scheduler_status_filter', statusFilter);
+    } catch (e) {
+      console.error('Failed to save statusFilter to localStorage', e);
+    }
+  }, [statusFilter]);
 
   useEffect(() => {
     try {
