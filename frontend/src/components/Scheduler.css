@@ -601,6 +601,36 @@ body {
   box-shadow: 2px 0 4px rgba(0,0,0,0.04);
 }
 
+.td-station-sticky.clickable-station {
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.td-station-sticky.clickable-station:hover {
+  background-color: #e2e8f0;
+}
+
+.td-station-sticky.clickable-station:hover .station-name-text {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
+
+.external-link-icon {
+  font-size: 11px;
+  color: #64748b;
+  opacity: 0.7;
+  display: inline-block;
+  vertical-align: baseline;
+  margin-left: 3px;
+  transition: all 0.15s;
+}
+
+.td-station-sticky.clickable-station:hover .external-link-icon {
+  color: #1d4ed8;
+  opacity: 1;
+  transform: translateY(-1px) translateX(1px);
+}
+
 .station-cell-content {
   display: flex;
   justify-content: space-between;

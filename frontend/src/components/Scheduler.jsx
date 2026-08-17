@@ -576,8 +576,12 @@ const Scheduler = () => {
   };
 
   const openDoc = (type, docName) => {
-    const docType = type === 'jobcard' ? 'job-card' : 'work-order';
-    window.open(`http://localhost:8080/app/${docType}/${docName}`, '_blank');
+    if (!docName || docName === 'Unassigned') return;
+    let docType = 'work-order';
+    if (type === 'jobcard') docType = 'job-card';
+    else if (type === 'workstation') docType = 'workstation';
+    else docType = type;
+    window.open(`http://localhost:8080/app/${docType}/${encodeURIComponent(docName)}`, '_blank');
   };
 
   const monthTitle = activeDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toUpperCase();
@@ -776,10 +780,15 @@ const Scheduler = () => {
                     return (
                       <tr key={stationName} className={`matrix-row ${isDraggingThisStation ? 'row-active-drag' : ''} ${isDraggingOtherStation ? 'row-inactive-drag' : ''}`}>
                         {/* Left Fixed Station Header */}
-                        <td className="td-station-sticky">
+                        <td
+                          className={`td-station-sticky ${stationName !== 'Unassigned' ? 'clickable-station' : ''}`}
+                          onClick={() => stationName !== 'Unassigned' && openDoc('workstation', stationName)}
+                          title={stationName !== 'Unassigned' ? `Click to open Workstation "${stationName}" in ERPNext` : stationName}
+                        >
                           <div className="station-cell-content">
-                            <div className="station-name-text" title={stationName}>
+                            <div className="station-name-text">
                               {stationName}
+                              {stationName !== 'Unassigned' && <span className="external-link-icon" title="Open in ERPNext"> ↗</span>}
                             </div>
                             {stationMonthEvents.length > 0 && (
                               <span className="station-event-count" title={`${stationMonthEvents.length} scheduled jobs this month`}>
