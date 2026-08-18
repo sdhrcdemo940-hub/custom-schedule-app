@@ -38,6 +38,7 @@ const Scheduler = () => {
     const saved = localStorage.getItem('scheduler_status_filter');
     return saved || 'all';
   });
+  const [hideOffStations, setHideOffStations] = useState(false);
 
   // Matrix navigation state: active month (defaults to current date, e.g. August 2026)
   const [activeDate, setActiveDate] = useState(() => {
@@ -344,20 +345,36 @@ const Scheduler = () => {
     }
   };
 
+  // Build a lookup of Off-status workstation names from backend
+  const offStationNames = useMemo(() => {
+    const set = new Set();
+    backendWorkstations.forEach(ws => {
+      if ((ws.status || '').toLowerCase() === 'off') {
+        const name = (ws.workstation_name || ws.name || '').trim();
+        if (name) set.add(name);
+      }
+    });
+    return set;
+  }, [backendWorkstations]);
+
   // List of all distinct workstations (from backend DB + events)
   const workstationList = useMemo(() => {
     const set = new Set();
     
-    // Add known stations from backend
+    // Add known stations from backend (skip Off-status if toggle is on)
     backendWorkstations.forEach(ws => {
+      if (hideOffStations && (ws.status || '').toLowerCase() === 'off') return;
       const name = (ws.workstation_name || ws.name || '').trim();
       if (name) set.add(name);
     });
 
-    // Add stations from active events
+    // Add stations from active events, but respect hideOffStations toggle
     events.forEach(e => {
       const w = (e.extendedProps?.workstation || '').trim();
-      if (w && w !== 'Unassigned') set.add(w);
+      if (w && w !== 'Unassigned') {
+        if (hideOffStations && offStationNames.has(w)) return;
+        set.add(w);
+      }
     });
 
     const list = Array.from(set).sort();
@@ -373,7 +390,7 @@ const Scheduler = () => {
       list.push('Unassigned');
     }
     return list;
-  }, [backendWorkstations, events, viewFilter]);
+  }, [backendWorkstations, events, viewFilter, hideOffStations]);
 
   // Generate all days in the currently selected month
   const monthDays = useMemo(() => {
@@ -677,6 +694,16 @@ const Scheduler = () => {
             <option value="in progress">In Progress</option>
             <option value="completed">Completed</option>
           </select>
+
+          {/* Hide Off-Status Workstations Toggle */}
+          <label className="hide-off-stations-toggle" title="Hide workstations marked as Off in ERPNext">
+            <input
+              type="checkbox"
+              checked={hideOffStations}
+              onChange={() => setHideOffStations(v => !v)}
+            />
+            <span>Hide Off Stations{offStationNames.size > 0 ? ` (${offStationNames.size})` : ''}</span>
+          </label>
         </div>
 
         {/* Zoom Controls (For Matrix View) */}

@@ -313,6 +313,46 @@ body {
   background-color: #ffffff;
 }
 
+/* Hide Off Stations toggle checkbox */
+.hide-off-stations-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #475569;
+  cursor: pointer;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background-color: #f8fafc;
+  user-select: none;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.hide-off-stations-toggle:hover {
+  background-color: #fee2e2;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+
+.hide-off-stations-toggle input[type="checkbox"] {
+  accent-color: #dc2626;
+  cursor: pointer;
+  width: 13px;
+  height: 13px;
+}
+
+.hide-off-stations-toggle:has(input:checked) {
+  background-color: #fef2f2;
+  border-color: #dc2626;
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+
+
 .zoom-controls {
   display: flex;
   align-items: center;
