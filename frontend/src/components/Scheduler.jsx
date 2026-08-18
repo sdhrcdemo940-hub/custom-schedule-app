@@ -724,15 +724,17 @@ const Scheduler = () => {
             <option value="completed">Completed</option>
           </select>
 
-          {/* Hide Off-Status Workstations Toggle */}
-          <label className="hide-off-stations-toggle" title="Hide workstations marked as Off in ERPNext">
-            <input
-              type="checkbox"
-              checked={hideOffStations}
-              onChange={() => setHideOffStations(v => !v)}
-            />
-            <span>Hide Off Stations{offStationNames.size > 0 ? ` (${offStationNames.size})` : ''}</span>
-          </label>
+          {/* Hide Off-Status Workstations Toggle (Matrix View only) */}
+          {activeTab === 'matrix' && (
+            <label className="hide-off-stations-toggle" title="Hide workstations marked as Off in ERPNext">
+              <input
+                type="checkbox"
+                checked={hideOffStations}
+                onChange={() => setHideOffStations(v => !v)}
+              />
+              <span>Hide Off Stations{offStationNames.size > 0 ? ` (${offStationNames.size})` : ''}</span>
+            </label>
+          )}
         </div>
 
         {/* Zoom Controls (For Matrix View) */}
