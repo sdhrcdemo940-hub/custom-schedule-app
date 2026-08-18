@@ -294,7 +294,7 @@ const Scheduler = () => {
           throw new Error(errData.error || errData.message || 'Failed to reschedule Job Card');
         }
 
-        showToast(`✓ Job Card ${docName} rescheduled to ${newStart.toLocaleDateString()}`);
+        showToast(`✓ Job Card ${docName} rescheduled (parent Work Order synced)`);
       } else if (type === 'workorder') {
         const body = {
           planned_start_date: formatDateLocal(newStart),

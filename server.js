@@ -80,6 +80,72 @@ app.get('/api/job-cards/:id', async (req, res) => {
   }
 });
 
+// Auto-sync parent Work Order planned start and end dates based on the earliest and latest Job Cards
+const syncWorkOrderDatesFromJobCards = async (workOrderId) => {
+  if (!workOrderId) return;
+  try {
+    // 1. Fetch all non-cancelled Job Cards linked to this Work Order
+    const listResp = await erpnextAPI.get('/Job Card', {
+      params: {
+        fields: JSON.stringify(['name']),
+        filters: JSON.stringify([
+          ['work_order', '=', workOrderId],
+          ['docstatus', '!=', 2]
+        ]),
+        limit_page_length: 500
+      }
+    });
+
+    const names = (listResp.data.data || []).map(r => r.name);
+    if (names.length === 0) return;
+
+    // 2. Fetch full details to get normalized from_time and to_time
+    const jobCards = await Promise.all(names.map(async (n) => {
+      try {
+        const r = await erpnextAPI.get(`/Job Card/${n}`);
+        return normalizeJobCardTimes(r.data.data);
+      } catch (e) {
+        return null;
+      }
+    }));
+
+    let minStart = null;
+    let maxEnd = null;
+
+    jobCards.filter(Boolean).forEach(jc => {
+      if (jc.from_time) {
+        const s = new Date(String(jc.from_time).replace(' ', 'T'));
+        if (!isNaN(s.getTime())) {
+          if (!minStart || s < minStart) minStart = s;
+        }
+      }
+      if (jc.to_time) {
+        const e = new Date(String(jc.to_time).replace(' ', 'T'));
+        if (!isNaN(e.getTime())) {
+          if (!maxEnd || e > maxEnd) maxEnd = e;
+        }
+      }
+    });
+
+    if (minStart && maxEnd) {
+      const pad = (v) => String(v).padStart(2, '0');
+      const formatDT = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      
+      const planned_start_date = formatDT(minStart);
+      const planned_end_date = formatDT(maxEnd);
+
+      console.log(`[Auto-Sync] Updating parent Work Order ${workOrderId}: planned_start_date=${planned_start_date}, planned_end_date=${planned_end_date}`);
+
+      await erpnextAPI.put(`/Work Order/${workOrderId}`, {
+        planned_start_date,
+        planned_end_date
+      });
+    }
+  } catch (err) {
+    console.error(`[Auto-Sync Error] Failed to sync parent Work Order ${workOrderId} dates:`, err.response ? err.response.data : err.message);
+  }
+};
+
 const updateJobCardSchedule = async (jobCardId, from_time, to_time) => {
   // Fetch the Job Card so we can update the scheduled_time_logs child row if present.
   const jobCardResponse = await erpnextAPI.get(`/Job Card/${jobCardId}`);
@@ -101,7 +167,14 @@ const updateJobCardSchedule = async (jobCardId, from_time, to_time) => {
     payload.to_time = to_time;
   }
 
-  return erpnextAPI.put(`/Job Card/${jobCardId}`, payload);
+  const response = await erpnextAPI.put(`/Job Card/${jobCardId}`, payload);
+
+  // Automatically update parent Work Order to span from the earliest Job Card to the latest Job Card
+  if (jobCard.work_order) {
+    await syncWorkOrderDatesFromJobCards(jobCard.work_order);
+  }
+
+  return response;
 };
 
 // Update Job Card dates (reschedule)
