@@ -357,10 +357,11 @@ const Scheduler = () => {
     return set;
   }, [backendWorkstations]);
 
-  // List of all distinct workstations (from backend DB + events)
+  // List of all distinct workstations (from backend DB + Job Card events only)
+  // Work Orders are NOT tied to a single workstation — only Job Cards are.
   const workstationList = useMemo(() => {
     const set = new Set();
-    
+
     // Add known stations from backend (skip Off-status if toggle is on)
     backendWorkstations.forEach(ws => {
       if (hideOffStations && (ws.status || '').toLowerCase() === 'off') return;
@@ -368,8 +369,9 @@ const Scheduler = () => {
       if (name) set.add(name);
     });
 
-    // Add stations from active events, but respect hideOffStations toggle
+    // Add stations from Job Card events only — WOs don't own a single workstation
     events.forEach(e => {
+      if (e.extendedProps?.type !== 'jobcard') return;
       const w = (e.extendedProps?.workstation || '').trim();
       if (w && w !== 'Unassigned') {
         if (hideOffStations && offStationNames.has(w)) return;
@@ -378,19 +380,19 @@ const Scheduler = () => {
     });
 
     const list = Array.from(set).sort();
-    
-    // Only include Unassigned if there are actually unassigned events matching current filter
-    const hasUnassignedEvents = events.some(e => {
+
+    // Include Unassigned row only if there are unassigned Job Cards
+    const hasUnassignedJC = events.some(e => {
+      if (e.extendedProps?.type !== 'jobcard') return false;
       const w = (e.extendedProps?.workstation || '').trim();
-      const matchesType = viewFilter === 'all' || e.extendedProps?.type === viewFilter;
-      return matchesType && (!w || w === 'Unassigned');
+      return !w || w === 'Unassigned';
     });
 
-    if (hasUnassignedEvents) {
+    if (hasUnassignedJC) {
       list.push('Unassigned');
     }
     return list;
-  }, [backendWorkstations, events, viewFilter, hideOffStations]);
+  }, [backendWorkstations, events, hideOffStations, offStationNames]);
 
   // Generate all days in the currently selected month
   const monthDays = useMemo(() => {
@@ -466,10 +468,10 @@ const Scheduler = () => {
     return s <= dayEnd && en >= dayStart;
   };
 
-  // Filtered events
+  // Filtered events — used by the Calendar view (respects all filters including type)
   const filteredEvents = useMemo(() => {
     return events.filter(e => {
-      // Type filter
+      // Type filter (calendar view only)
       if (viewFilter !== 'all' && e.extendedProps?.type !== viewFilter) {
         return false;
       }
@@ -493,6 +495,31 @@ const Scheduler = () => {
       return true;
     });
   }, [events, viewFilter, statusFilter, searchQuery]);
+
+  // Matrix events — always Job Cards only (WOs are not workstation-specific)
+  const matrixEvents = useMemo(() => {
+    return events.filter(e => {
+      if (e.extendedProps?.type !== 'jobcard') return false;
+      // Status filter
+      if (statusFilter !== 'all' && (e.extendedProps?.status || '').toLowerCase() !== statusFilter.toLowerCase()) {
+        return false;
+      }
+      // Search query
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase();
+        const title = (e.title || '').toLowerCase();
+        const item = (e.extendedProps?.itemCode || '').toLowerCase();
+        const wo = (e.extendedProps?.workOrder || '').toLowerCase();
+        const doc = (e.extendedProps?.docName || '').toLowerCase();
+        const op = (e.extendedProps?.operation || '').toLowerCase();
+        const ws = (e.extendedProps?.workstation || '').toLowerCase();
+        if (!title.includes(query) && !item.includes(query) && !wo.includes(query) && !doc.includes(query) && !op.includes(query) && !ws.includes(query)) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [events, statusFilter, searchQuery]);
 
   // Zoom handlers
   const handleZoomIn = () => setZoomIndex(i => Math.min(ZOOM_LEVELS.length - 1, i + 1));
@@ -674,15 +701,17 @@ const Scheduler = () => {
             )}
           </div>
 
-          <select
-            className="select-filter"
-            value={viewFilter}
-            onChange={(e) => setViewFilter(e.target.value)}
-          >
-            <option value="all">All Documents</option>
-            <option value="jobcard">Job Cards Only</option>
-            <option value="workorder">Work Orders Only</option>
-          </select>
+          {activeTab === 'calendar' && (
+            <select
+              className="select-filter"
+              value={viewFilter}
+              onChange={(e) => setViewFilter(e.target.value)}
+            >
+              <option value="all">All Documents</option>
+              <option value="jobcard">Job Cards Only</option>
+              <option value="workorder">Work Orders Only</option>
+            </select>
+          )}
 
           <select
             className="select-filter"
@@ -794,8 +823,8 @@ const Scheduler = () => {
                 {/* Table Body: Station Rows */}
                 <tbody>
                   {workstationList.map((stationName) => {
-                    // Count total events for this station in this month
-                    const stationMonthEvents = filteredEvents.filter(e => {
+                    // Count total events for this station in this month (Job Cards only)
+                    const stationMonthEvents = matrixEvents.filter(e => {
                       const ws = (e.extendedProps?.workstation || 'Unassigned').trim();
                       if (ws !== stationName) return false;
                       return monthDays.some(d => eventIntersectsDay(e, d));
@@ -833,8 +862,8 @@ const Scheduler = () => {
                           const cellKey = `${stationName}::${day.toISOString()}`;
                           const isDragOver = dragOverCell === cellKey;
 
-                          // Find all events for this station that fall on this day
-                          const cellEvents = filteredEvents.filter(e => {
+                          // Find all Job Card events for this station that fall on this day
+                          const cellEvents = matrixEvents.filter(e => {
                             const ws = (e.extendedProps?.workstation || 'Unassigned').trim();
                             if (ws !== stationName) return false;
                             return eventIntersectsDay(e, day);
