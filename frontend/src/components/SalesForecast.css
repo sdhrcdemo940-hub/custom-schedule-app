@@ -1,0 +1,388 @@
+/* ===================================================
+   SALES FORECAST DASHBOARD — SalesForecast.css
+   =================================================== */
+
+/* Root */
+.sf-root {
+  min-height: 100vh;
+  background: #f1f5f9;
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* ─── Top Bar ─── */
+.sf-topbar {
+  background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #1d4ed8 100%);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 3px solid #3b82f6;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.sf-topbar-left { display: flex; align-items: center; gap: 12px; }
+.sf-logo-badge {
+  background: #3b82f6;
+  color: #fff;
+  font-weight: 900;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  letter-spacing: 0.05em;
+}
+.sf-title {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin: 0;
+  color: #fff;
+}
+.sf-subtitle { font-size: 11px; color: #93c5fd; margin-top: 2px; }
+.sf-topbar-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sf-last-updated { font-size: 11px; color: #94a3b8; }
+
+.sf-btn-refresh, .sf-btn-export {
+  padding: 7px 14px;
+  border-radius: 7px;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+.sf-btn-refresh {
+  background: #1d4ed8;
+  color: #fff;
+  border: 1px solid #3b82f6;
+}
+.sf-btn-refresh:hover:not(:disabled) { background: #2563eb; }
+.sf-btn-refresh:disabled { opacity: 0.6; cursor: not-allowed; }
+.sf-btn-export {
+  background: #16a34a;
+  color: #fff;
+}
+.sf-btn-export:hover { background: #15803d; }
+
+/* ─── Error Banner ─── */
+.sf-error-banner {
+  background: #fee2e2;
+  color: #991b1b;
+  border-left: 4px solid #ef4444;
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* ─── Loading ─── */
+.sf-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  gap: 16px;
+}
+.sf-spinner {
+  width: 44px;
+  height: 44px;
+  border: 4px solid #e2e8f0;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: sf-spin 0.9s linear infinite;
+}
+@keyframes sf-spin { to { transform: rotate(360deg); } }
+.sf-loading-text { color: #64748b; font-size: 14px; }
+.spin { display: inline-block; animation: sf-spin 0.9s linear infinite; }
+
+/* ─── Stats Row ─── */
+.sf-stats-row {
+  display: flex;
+  gap: 12px;
+  padding: 16px 20px 0;
+  flex-wrap: wrap;
+}
+.sf-stat-card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 14px 18px;
+  min-width: 130px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 4px rgba(0,0,0,.05);
+  flex: 1;
+}
+.sf-stat-value {
+  font-size: 26px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1;
+}
+.sf-stat-label { font-size: 11px; color: #64748b; margin-top: 4px; font-weight: 500; }
+.sf-stat-trend { border: 2px solid; }
+
+/* ─── Controls Row ─── */
+.sf-controls-row {
+  display: flex;
+  gap: 16px;
+  padding: 14px 20px;
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+  border-top: 1px solid #e2e8f0;
+  margin-top: 14px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.sf-control-group { display: flex; flex-direction: column; gap: 6px; }
+.sf-control-label { font-size: 11px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; }
+.sf-select {
+  padding: 7px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  font-size: 13px;
+  background: #f8fafc;
+  color: #1e293b;
+  min-width: 220px;
+  cursor: pointer;
+}
+.sf-select:focus { outline: 2px solid #3b82f6; }
+
+/* Buffer buttons */
+.sf-buffer-buttons { display: flex; gap: 6px; }
+.sf-buffer-btn {
+  padding: 5px 12px;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 6px;
+  background: #f8fafc;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #475569;
+  transition: all 0.15s;
+}
+.sf-buffer-btn.active, .sf-buffer-btn:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #fff;
+}
+
+/* Method legend */
+.sf-legend-group { margin-left: auto; }
+.sf-method-legend { display: flex; gap: 10px; flex-wrap: wrap; }
+.sf-legend-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1.5px solid;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #334155;
+}
+.sf-legend-bar {
+  width: 12px; height: 12px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.sf-legend-line {
+  width: 20px; height: 3px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* ─── Forecast Cards ─── */
+.sf-forecast-cards {
+  display: flex;
+  gap: 14px;
+  padding: 16px 20px 0;
+  flex-wrap: wrap;
+}
+.sf-fcard {
+  background: #fff;
+  border-radius: 12px;
+  padding: 18px 20px;
+  flex: 1;
+  min-width: 200px;
+  border: 2px solid #e2e8f0;
+  box-shadow: 0 2px 8px rgba(0,0,0,.06);
+  transition: box-shadow 0.2s;
+}
+.sf-fcard:hover { box-shadow: 0 4px 16px rgba(59,130,246,.15); border-color: #3b82f6; }
+.sf-fcard-1 { border-top-color: #3b82f6; }
+.sf-fcard-2 { border-top-color: #8b5cf6; }
+.sf-fcard-3 { border-top-color: #f97316; }
+
+.sf-fcard-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.sf-fcard-period { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+.sf-fcard-month { font-size: 12px; font-weight: 700; color: #334155; background: #f1f5f9; padding: 2px 8px; border-radius: 5px; }
+
+.sf-fcard-recommended {
+  font-size: 36px;
+  font-weight: 900;
+  color: #0f172a;
+  line-height: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.sf-fcard-buffer-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: #16a34a;
+  padding: 2px 7px;
+  border-radius: 10px;
+}
+.sf-fcard-label { font-size: 11px; color: #64748b; font-weight: 500; margin: 4px 0 10px; }
+.sf-fcard-methods { display: flex; flex-direction: column; gap: 3px; }
+.sf-fcard-method { font-size: 12px; font-weight: 600; }
+
+/* ─── Chart Section ─── */
+.sf-chart-section {
+  background: #fff;
+  margin: 16px 20px 0;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  padding: 20px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.05);
+}
+.sf-chart-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 16px;
+}
+.sf-chart-buffer-note { font-weight: 400; color: #64748b; font-size: 12px; }
+
+/* Custom Tooltip */
+.fc-tooltip {
+  background: #0f172a;
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: #fff;
+  box-shadow: 0 4px 20px rgba(0,0,0,.25);
+  min-width: 160px;
+}
+.fc-tooltip-month { font-size: 11px; font-weight: 700; color: #94a3b8; margin-bottom: 6px; }
+.fc-tooltip-row { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 3px 0; }
+.fc-tooltip-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.fc-tooltip-name { color: #cbd5e1; }
+.fc-tooltip-val { font-weight: 700; margin-left: auto; }
+
+/* ─── Data Table ─── */
+.sf-table-section {
+  background: #fff;
+  margin: 16px 20px 0;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  padding: 20px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.05);
+}
+.sf-table-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 14px;
+}
+.sf-table-scroll { overflow-x: auto; }
+.sf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.sf-table th {
+  background: #1e3a8a;
+  color: #fff;
+  padding: 10px 14px;
+  text-align: left;
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.sf-table td {
+  padding: 9px 14px;
+  border-bottom: 1px solid #f1f5f9;
+  white-space: nowrap;
+}
+.sf-row-history td { background: #fff; }
+.sf-row-forecast td { background: #f8faff; }
+.sf-row-forecast:hover td { background: #eff6ff; }
+
+.sf-td-month { font-weight: 700; color: #334155; }
+.sf-td-qty { font-weight: 700; color: #0f172a; }
+.sf-td-na { color: #cbd5e1; }
+.sf-td-sma { color: #3b82f6; font-weight: 700; }
+.sf-td-wma { color: #8b5cf6; font-weight: 700; }
+.sf-td-trend { color: #f97316; font-weight: 700; }
+.sf-td-recommended { font-weight: 800; color: #0f172a; background: #f0fdf4; }
+
+.sf-type-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.sf-type-actual { background: #f1f5f9; color: #475569; }
+.sf-type-forecast { background: #eff6ff; color: #1d4ed8; }
+
+/* ─── All Items Grid ─── */
+.sf-all-items-section {
+  margin: 16px 20px;
+  background: #fff;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  padding: 20px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.05);
+}
+.sf-all-items-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.sf-item-card {
+  border: 2px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background: #f8fafc;
+}
+.sf-item-card:hover { border-color: #3b82f6; background: #eff6ff; }
+.sf-item-card.selected { border-color: #1d4ed8; background: #eff6ff; box-shadow: 0 0 0 3px rgba(59,130,246,.2); }
+
+.sf-item-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 6px; }
+.sf-item-code { font-size: 12px; font-weight: 800; color: #0f172a; }
+.sf-item-trend-badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; }
+
+.sf-item-stats { display: flex; justify-content: space-between; margin-bottom: 10px; }
+.sf-item-stat-val { font-size: 18px; font-weight: 800; color: #0f172a; }
+.sf-item-stat-lbl { font-size: 10px; color: #94a3b8; font-weight: 500; }
+
+/* Mini sparkbar */
+.sf-item-history-mini {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 28px;
+  margin-top: 4px;
+}
+.sf-mini-bar-wrap { flex: 1; display: flex; align-items: flex-end; height: 100%; }
+.sf-mini-bar {
+  width: 100%;
+  border-radius: 2px 2px 0 0;
+  min-height: 4px;
+  opacity: 0.8;
+  transition: opacity 0.15s;
+}
+.sf-mini-bar:hover { opacity: 1; }

@@ -283,6 +283,180 @@ app.get('/api/schedule', async (req, res) => {
   }
 });
 
+// ==================== SALES FORECAST ENDPOINT ====================
+
+// Helper: aggregate monthly qty per item from all Sales Orders
+const buildMonthlyTotals = (salesOrders) => {
+  // { itemCode -> { 'YYYY-MM' -> totalQty } }
+  const totals = {};
+
+  salesOrders.forEach(so => {
+    const date = so.transaction_date; // 'YYYY-MM-DD'
+    if (!date) return;
+    const yearMonth = date.substring(0, 7); // 'YYYY-MM'
+    (so.items || []).forEach(item => {
+      const code = item.item_code;
+      if (!code) return;
+      if (!totals[code]) totals[code] = {};
+      totals[code][yearMonth] = (totals[code][yearMonth] || 0) + (parseFloat(item.qty) || 0);
+    });
+  });
+
+  return totals;
+};
+
+// Helper: generate next N year-month strings after the last known month
+const nextMonths = (sortedMonths, n) => {
+  const last = sortedMonths[sortedMonths.length - 1] || '2026-08';
+  const [y, m] = last.split('-').map(Number);
+  const results = [];
+  for (let i = 1; i <= n; i++) {
+    const nm = m + i;
+    const ny = y + Math.floor((nm - 1) / 12);
+    const mm = ((nm - 1) % 12) + 1;
+    results.push(`${ny}-${String(mm).padStart(2, '0')}`);
+  }
+  return results;
+};
+
+// Helper: Simple Moving Average
+const sma = (vals) => vals.length === 0 ? 0 : vals.reduce((a, b) => a + b, 0) / vals.length;
+
+// Helper: Weighted Moving Average (most recent = highest weight)
+const wma = (vals) => {
+  if (vals.length === 0) return 0;
+  const n = vals.length;
+  const weights = vals.map((_, i) => i + 1); // weight 1, 2, 3...
+  const weightSum = weights.reduce((a, b) => a + b, 0);
+  return vals.reduce((sum, v, i) => sum + v * weights[i], 0) / weightSum;
+};
+
+// Helper: Linear Trend (least squares regression)
+const linearTrend = (vals) => {
+  const n = vals.length;
+  if (n < 2) return vals[0] || 0;
+  const xs = vals.map((_, i) => i);
+  const meanX = xs.reduce((a, b) => a + b, 0) / n;
+  const meanY = vals.reduce((a, b) => a + b, 0) / n;
+  const slope = xs.reduce((sum, x, i) => sum + (x - meanX) * (vals[i] - meanY), 0) /
+                xs.reduce((sum, x) => sum + (x - meanX) ** 2, 0);
+  const intercept = meanY - slope * meanX;
+  return Math.max(0, slope * n + intercept); // Forecast for next period
+};
+
+app.get('/api/sales-forecast', async (req, res) => {
+  try {
+    // 1. Fetch all non-cancelled Sales Order names
+    const listResp = await erpnextAPI.get('/Sales Order', {
+      params: {
+        fields: JSON.stringify(['name']),
+        filters: JSON.stringify([['docstatus', '!=', 2]]),
+        limit_page_length: 500
+      }
+    });
+    const names = (listResp.data.data || []).map(r => r.name);
+
+    // 2. Fetch full details for all SOs (parallel with concurrency limit)
+    const BATCH = 20;
+    const allSOs = [];
+    for (let i = 0; i < names.length; i += BATCH) {
+      const batch = names.slice(i, i + BATCH);
+      const results = await Promise.all(batch.map(async (n) => {
+        try {
+          const r = await erpnextAPI.get(`/Sales Order/${n}`);
+          const d = r.data.data;
+          return {
+            name: d.name,
+            transaction_date: d.transaction_date,
+            customer: d.customer,
+            status: d.status,
+            items: (d.items || []).map(it => ({
+              item_code: it.item_code,
+              item_name: it.item_name,
+              qty: it.qty,
+              rate: it.rate,
+              amount: it.amount,
+              uom: it.uom
+            }))
+          };
+        } catch (e) {
+          return null;
+        }
+      }));
+      allSOs.push(...results.filter(Boolean));
+    }
+
+    // 3. Aggregate monthly totals per item
+    const monthlyTotals = buildMonthlyTotals(allSOs);
+
+    // 4. Build forecast for each item
+    const FORECAST_MONTHS = 3;
+    const forecastData = {};
+
+    Object.entries(monthlyTotals).forEach(([itemCode, monthMap]) => {
+      const sortedMonths = Object.keys(monthMap).sort();
+      const historicalValues = sortedMonths.map(m => monthMap[m]);
+      const futureMonths = nextMonths(sortedMonths, FORECAST_MONTHS);
+
+      // Build forecasts for each future month using all 3 methods
+      const forecasts = futureMonths.map((fMonth, idx) => {
+        const windowVals = historicalValues.slice(-6); // Use last 6 months max
+
+        const smaVal = Math.round(sma(windowVals));
+        const wmaVal = Math.round(wma(windowVals));
+
+        // For linear trend: project forward idx+1 periods
+        const n = historicalValues.length;
+        const xs = historicalValues.map((_, i) => i);
+        const meanX = xs.reduce((a, b) => a + b, 0) / n;
+        const meanY = historicalValues.reduce((a, b) => a + b, 0) / n;
+        const denominator = xs.reduce((s, x) => s + (x - meanX) ** 2, 0);
+        const slope = denominator !== 0
+          ? xs.reduce((s, x, i) => s + (x - meanX) * (historicalValues[i] - meanY), 0) / denominator
+          : 0;
+        const intercept = meanY - slope * meanX;
+        const trendVal = Math.max(0, Math.round(slope * (n + idx) + intercept));
+
+        return {
+          month: fMonth,
+          sma: smaVal,
+          wma: wmaVal,
+          trend: trendVal
+        };
+      });
+
+      // Trend direction based on last two months
+      let trendDirection = 'stable';
+      if (historicalValues.length >= 2) {
+        const last = historicalValues[historicalValues.length - 1];
+        const prev = historicalValues[historicalValues.length - 2];
+        const change = ((last - prev) / (prev || 1)) * 100;
+        trendDirection = change > 5 ? 'growing' : change < -5 ? 'declining' : 'stable';
+      }
+
+      forecastData[itemCode] = {
+        itemCode,
+        historical: sortedMonths.map(m => ({ month: m, qty: monthMap[m] })),
+        forecasts,
+        trendDirection,
+        totalHistoricalQty: historicalValues.reduce((a, b) => a + b, 0),
+        avgMonthlyQty: Math.round(sma(historicalValues))
+      };
+    });
+
+    res.json({
+      success: true,
+      totalOrders: allSOs.length,
+      items: Object.values(forecastData),
+      generatedAt: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Error generating sales forecast:', error.response ? error.response.data : error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ==================== HEALTH CHECK ====================
 
 app.get('/api/health', (req, res) => {

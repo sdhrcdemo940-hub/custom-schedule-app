@@ -2,4 +2,43 @@
   width: 100%;
   min-height: 100vh;
   background-color: #f5f7fa;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── Global App Navigation Bar ─── */
+.app-nav-bar {
+  display: flex;
+  gap: 0;
+  background: #020617;
+  border-bottom: 2px solid #1e3a8a;
+  padding: 6px 20px;
+  flex-shrink: 0;
+}
+
+.app-nav-btn {
+  padding: 7px 20px;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  cursor: pointer;
+  border-radius: 7px 7px 0 0;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  transition: all 0.15s ease;
+  letter-spacing: 0.02em;
+}
+
+.app-nav-btn:hover {
+  color: #e2e8f0;
+  background: rgba(255,255,255,0.05);
+}
+
+.app-nav-btn.active {
+  color: #ffffff;
+  border-bottom-color: #3b82f6;
+  background: rgba(59,130,246,0.12);
 }
