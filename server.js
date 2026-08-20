@@ -137,7 +137,6 @@ app.put('/api/job-cards/:id/reschedule', async (req, res) => {
 // Get all Work Orders
 app.get('/api/work-orders', async (req, res) => {
   try {
-    // Fetch list of Work Order names, then fetch each Work Order document
     const listResp = await erpnextAPI.get('/Work Order', {
       params: {
         fields: JSON.stringify(['name']),
@@ -145,6 +144,7 @@ app.get('/api/work-orders', async (req, res) => {
         limit_page_length: 500
       }
     });
+
     const names = (listResp.data.data || []).map(r => r.name);
     const details = await Promise.all(names.map(async (n) => {
       try {
@@ -155,6 +155,7 @@ app.get('/api/work-orders', async (req, res) => {
         return null;
       }
     }));
+
     res.json(details.filter(Boolean));
   } catch (error) {
     console.error('Error fetching Work Orders:', error.response ? error.response.data : error.message);
@@ -172,11 +173,135 @@ app.get('/api/work-orders/:id', async (req, res) => {
   }
 });
 
-// Update Work Order dates (reschedule)
+
+// Helper: Synchronize reschedule for Work Order and its linked Job Cards
+const syncRescheduleWorkOrder = async (workOrderId, planned_start_date, planned_end_date) => {
+  // 1. Update the Work Order itself
+  const woResp = await erpnextAPI.put(`/Work Order/${workOrderId}`, {
+    planned_start_date: planned_start_date,
+    planned_end_date: planned_end_date
+  });
+  const updatedWO = woResp.data.data;
+
+  // 2. Fetch all Job Cards linked to this Work Order
+  let updatedJobCards = [];
+  try {
+    const jcListResp = await erpnextAPI.get('/Job Card', {
+      params: {
+        fields: JSON.stringify(['name', 'from_time', 'to_time', 'docstatus']),
+        filters: JSON.stringify([
+          ['work_order', '=', workOrderId],
+          ['docstatus', '!=', 2]
+        ]),
+        limit_page_length: 50
+      }
+    });
+
+    const jobCards = jcListResp.data.data || [];
+    if (jobCards.length > 0) {
+      const targetStart = new Date(planned_start_date.replace(' ', 'T'));
+      const targetEnd = new Date((planned_end_date || planned_start_date).replace(' ', 'T'));
+
+      for (const jc of jobCards) {
+        try {
+          // Calculate duration of existing job card or default to full day / shift
+          let fromTimeStr = `${planned_start_date.split(' ')[0]} 08:00:00`;
+          let toTimeStr = `${(planned_end_date || planned_start_date).split(' ')[0]} 17:00:00`;
+
+          if (jc.from_time && jc.to_time) {
+            const originalStart = new Date(jc.from_time.replace(' ', 'T'));
+            const originalEnd = new Date(jc.to_time.replace(' ', 'T'));
+            const durationMs = originalEnd.getTime() - originalStart.getTime();
+
+            const newStart = new Date(targetStart);
+            newStart.setHours(originalStart.getHours(), originalStart.getMinutes(), originalStart.getSeconds());
+            const newEnd = new Date(newStart.getTime() + Math.max(durationMs, 30 * 60 * 1000));
+
+            const pad = (n) => String(n).padStart(2, '0');
+            fromTimeStr = `${newStart.getFullYear()}-${pad(newStart.getMonth() + 1)}-${pad(newStart.getDate())} ${pad(newStart.getHours())}:${pad(newStart.getMinutes())}:${pad(newStart.getSeconds())}`;
+            toTimeStr = `${newEnd.getFullYear()}-${pad(newEnd.getMonth() + 1)}-${pad(newEnd.getDate())} ${pad(newEnd.getHours())}:${pad(newEnd.getMinutes())}:${pad(newEnd.getSeconds())}`;
+          }
+
+          await updateJobCardSchedule(jc.name, fromTimeStr, toTimeStr);
+          updatedJobCards.push(jc.name);
+        } catch (jcErr) {
+          console.warn(`Could not sync Job Card ${jc.name}:`, jcErr.message);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`Failed to fetch linked Job Cards for Work Order ${workOrderId}:`, err.message);
+  }
+
+  return { workOrder: updatedWO, updatedJobCards };
+};
+
+// Helper: Synchronize reschedule for Job Card and propagate to parent Work Order
+const syncRescheduleJobCard = async (jobCardId, from_time, to_time) => {
+  // 1. Update the Job Card itself
+  const jcResp = await updateJobCardSchedule(jobCardId, from_time, to_time);
+  const updatedJC = jcResp.data.data;
+  let updatedWO = null;
+
+  // 2. If Job Card is linked to a Work Order, update the Work Order planned dates
+  const workOrderId = updatedJC.work_order;
+  if (workOrderId) {
+    try {
+      const jcListResp = await erpnextAPI.get('/Job Card', {
+        params: {
+          fields: JSON.stringify(['name', 'from_time', 'to_time', 'docstatus']),
+          filters: JSON.stringify([
+            ['work_order', '=', workOrderId],
+            ['docstatus', '!=', 2]
+          ]),
+          limit_page_length: 50
+        }
+      });
+
+      const jobCards = jcListResp.data.data || [];
+      const validDates = [];
+      jobCards.forEach(j => {
+        const f = j.name === jobCardId ? from_time : j.from_time;
+        const t = j.name === jobCardId ? to_time : j.to_time;
+        if (f) validDates.push(new Date(f.replace(' ', 'T')));
+        if (t) validDates.push(new Date(t.replace(' ', 'T')));
+      });
+
+      if (validDates.length > 0) {
+        const minDate = new Date(Math.min(...validDates.map(d => d.getTime())));
+        const maxDate = new Date(Math.max(...validDates.map(d => d.getTime())));
+        const pad = (n) => String(n).padStart(2, '0');
+        const minDateStr = `${minDate.getFullYear()}-${pad(minDate.getMonth() + 1)}-${pad(minDate.getDate())}`;
+        const maxDateStr = `${maxDate.getFullYear()}-${pad(maxDate.getMonth() + 1)}-${pad(maxDate.getDate())}`;
+
+        const woPut = await erpnextAPI.put(`/Work Order/${workOrderId}`, {
+          planned_start_date: minDateStr,
+          planned_end_date: maxDateStr
+        });
+        updatedWO = woPut.data.data;
+      }
+    } catch (woErr) {
+      console.warn(`Could not sync parent Work Order ${workOrderId}:`, woErr.message);
+    }
+  }
+
+  return { jobCard: updatedJC, parentWorkOrder: updatedWO };
+};
+
+// Update Work Order dates (reschedule with automatic Job Card sync)
 app.put('/api/work-orders/:id/reschedule', async (req, res) => {
   try {
-    const { planned_start_date, planned_end_date } = req.body;
+    const { planned_start_date, planned_end_date, sync_job_cards = true } = req.body;
     
+    if (sync_job_cards) {
+      const result = await syncRescheduleWorkOrder(req.params.id, planned_start_date, planned_end_date || planned_start_date);
+      return res.json({
+        success: true,
+        message: `Work Order ${req.params.id} & ${result.updatedJobCards.length} linked Job Cards rescheduled`,
+        data: result
+      });
+    }
+
     const response = await erpnextAPI.put(`/Work Order/${req.params.id}`, {
       planned_start_date: planned_start_date,
       planned_end_date: planned_end_date
@@ -188,9 +313,46 @@ app.put('/api/work-orders/:id/reschedule', async (req, res) => {
       data: response.data.data
     });
   } catch (error) {
+    console.error('Work Order reschedule error:', error.response ? error.response.data : error.message);
     res.status(500).json({ 
       success: false,
       error: error.message 
+    });
+  }
+});
+
+// Unified Synchronized Reschedule Endpoint
+app.put('/api/schedule/sync-reschedule', async (req, res) => {
+  try {
+    const { type, docName, start, end, workOrderId } = req.body;
+
+    if (!type || !docName) {
+      return res.status(400).json({ success: false, error: 'type and docName are required' });
+    }
+
+    if (type === 'workorder') {
+      const result = await syncRescheduleWorkOrder(docName, start, end || start);
+      return res.json({
+        success: true,
+        message: `Work Order ${docName} and ${result.updatedJobCards.length} linked Job Card(s) updated`,
+        data: result
+      });
+    } else if (type === 'jobcard') {
+      const result = await syncRescheduleJobCard(docName, start, end || start);
+      return res.json({
+        success: true,
+        message: `Job Card ${docName} updated${result.parentWorkOrder ? ` & synced with Work Order ${result.parentWorkOrder.name}` : ''}`,
+        data: result
+      });
+    } else {
+      return res.status(400).json({ success: false, error: `Unsupported doc type: ${type}` });
+    }
+  } catch (error) {
+    console.error('Sync reschedule error:', error.response ? error.response.data : error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      details: error.response ? error.response.data : null
     });
   }
 });

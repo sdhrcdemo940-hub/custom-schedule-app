@@ -1110,6 +1110,95 @@ body {
   line-height: 1.35 !important;
 }
 
+/* ---- Custom Product-Centric Calendar Cards ---- */
+.fc-custom-event-node {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px 5px;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+}
+
+.fc-event-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.fc-event-item-name {
+  font-weight: 800;
+  font-size: 11.5px;
+  color: #ffffff;
+  letter-spacing: 0.3px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fc-event-qty-pill {
+  background: rgba(255, 255, 255, 0.28);
+  color: #ffffff;
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.fc-event-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.fc-event-wo-pill {
+  background: rgba(0, 0, 0, 0.38);
+  color: #f8fafc;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  white-space: nowrap;
+}
+
+.fc-event-jc-pill {
+  background: rgba(0, 0, 0, 0.22);
+  color: #e2e8f0;
+  font-size: 8.5px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.fc-event-footer-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 8.5px;
+  color: rgba(255, 255, 255, 0.9);
+  flex-wrap: wrap;
+  margin-top: 1px;
+}
+
+.fc-event-station-pill {
+  background: rgba(255, 255, 255, 0.2);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+.fc-event-op-pill {
+  font-style: italic;
+  opacity: 0.92;
+}
+
 .fc-event-title {
   font-weight: 600 !important;
   font-size: 11px !important;

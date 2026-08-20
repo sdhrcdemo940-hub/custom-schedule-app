@@ -123,18 +123,21 @@ const Scheduler = () => {
         setBackendWorkstations(data.workstations);
       }
 
-      // Transform Job Cards
+      // Transform Job Cards (Product-first title with WO and JC references)
       const jobCardEvents = (data.jobCards || []).map(jc => {
         const startTime = parseDateTime(jc.from_time);
         const endTime = parseDateTime(jc.to_time);
-        const itemCode = jc.production_item || jc.item_name || '';
+        const itemCode = jc.production_item || jc.item_name || 'Product';
         const qty = jc.for_quantity || jc.total_completed_qty || '';
         const operation = jc.operation || '';
         const station = (jc.workstation || jc.workstation_name || jc.workstation_type || 'Unassigned').trim();
+        const woName = jc.work_order || '';
+
+        const title = `${itemCode}${qty ? ` (${qty} kg)` : ''}${woName ? ` | WO: ${woName}` : ''}${operation ? ` • ${operation}` : ''}`;
 
         return {
           id: `jc-${jc.name}`,
-          title: `JC: ${jc.name}${itemCode ? ' | ' + itemCode : ''}${qty ? ' : ' + qty : ''}${operation ? ' (' + operation + ')' : ''}`,
+          title: title,
           start: startTime,
           end: endTime,
           allDay: false,
@@ -147,74 +150,44 @@ const Scheduler = () => {
             qty: qty,
             operation: operation,
             status: jc.status,
-            workOrder: jc.work_order,
+            workOrder: woName,
             workstation: station,
             raw: jc
           }
         };
       });
 
-      // Transform Work Orders (use operations child table to place each operation at its proper workstation)
-      const workOrderEvents = [];
-      (data.workOrders || []).forEach(wo => {
-        const itemCode = wo.production_item || wo.item_name || '';
+      // Transform Work Orders (Exactly ONE event per Work Order to prevent duplicates)
+      const workOrderEvents = (data.workOrders || []).map(wo => {
+        const itemCode = wo.production_item || wo.item_name || 'Product';
         const qty = wo.qty || '';
-        const ops = Array.isArray(wo.operations) && wo.operations.length > 0 ? wo.operations : null;
+        const startTime = parseDateTime(wo.planned_start_date || wo.creation);
+        const endTime = parseDateTime(wo.planned_end_date || wo.planned_start_date || wo.creation);
+        const station = (wo.workstation || wo.workstation_name || 'Unassigned').trim();
+        const opCount = Array.isArray(wo.operations) ? wo.operations.length : 0;
+        const opSummary = opCount > 0 ? `${opCount} ops` : '';
+        const title = `${itemCode}${qty ? ` (${qty} kg)` : ''} | WO: ${wo.name}${opSummary ? ` (${opSummary})` : ''}`;
 
-        if (ops) {
-          ops.forEach((op, opIdx) => {
-            const startTime = parseDateTime(op.planned_start_time || wo.planned_start_date || wo.creation);
-            const endTime = parseDateTime(op.planned_end_time || op.planned_start_time || wo.planned_end_date || wo.creation);
-            const station = (op.workstation || wo.workstation || 'Unassigned').trim();
-
-            workOrderEvents.push({
-              id: `wo-${wo.name}-op-${op.name || opIdx}`,
-              title: `WO: ${wo.name}${itemCode ? ' | ' + itemCode : ''}${qty ? ' : ' + qty : ''}${op.operation ? ' (' + op.operation + ')' : ''}`,
-              start: startTime,
-              end: endTime,
-              allDay: false,
-              backgroundColor: getStatusColorWO(op.status || wo.status),
-              borderColor: '#334155',
-              extendedProps: {
-                type: 'workorder',
-                docName: wo.name,
-                operationName: op.name,
-                itemCode: itemCode,
-                qty: qty,
-                operation: op.operation || 'Production',
-                status: op.status || wo.status,
-                workOrder: wo.name,
-                workstation: station,
-                raw: wo
-              }
-            });
-          });
-        } else {
-          const startTime = parseDateTime(wo.planned_start_date || wo.creation);
-          const endTime = parseDateTime(wo.planned_end_date || wo.planned_start_date || wo.creation);
-          const station = (wo.workstation || wo.workstation_name || 'Unassigned').trim();
-
-          workOrderEvents.push({
-            id: `wo-${wo.name}`,
-            title: `WO: ${wo.name}${itemCode ? ' | ' + itemCode : ''}${qty ? ' : ' + qty : ''}`,
-            start: startTime,
-            end: endTime,
-            allDay: true,
-            backgroundColor: getStatusColorWO(wo.status),
-            borderColor: '#334155',
-            extendedProps: {
-              type: 'workorder',
-              docName: wo.name,
-              itemCode: itemCode,
-              qty: qty,
-              operation: 'Production',
-              status: wo.status,
-              workOrder: wo.name,
-              workstation: station,
-              raw: wo
-            }
-          });
-        }
+        return {
+          id: `wo-${wo.name}`,
+          title: title,
+          start: startTime,
+          end: endTime,
+          allDay: true,
+          backgroundColor: getStatusColorWO(wo.status),
+          borderColor: '#334155',
+          extendedProps: {
+            type: 'workorder',
+            docName: wo.name,
+            itemCode: itemCode,
+            qty: qty,
+            operation: opSummary || 'Production',
+            status: wo.status,
+            workOrder: wo.name,
+            workstation: station,
+            raw: wo
+          }
+        };
       });
 
       setEvents([...jobCardEvents, ...workOrderEvents]);
@@ -269,54 +242,45 @@ const Scheduler = () => {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   };
 
-  // Reschedule API caller
+  // Synchronized Reschedule API caller (coordinates Work Orders and child Job Cards together)
   const rescheduleEvent = async (eventObj, newStart, newEnd, newWorkstation) => {
     const type = eventObj.extendedProps?.type;
     const docName = eventObj.extendedProps?.docName;
+    const itemCode = eventObj.extendedProps?.itemCode || 'Product';
+    const workOrder = eventObj.extendedProps?.workOrder;
     if (!type || !docName) throw new Error('Invalid event data');
 
     setSyncing(true);
     try {
-      if (type === 'jobcard') {
-        const body = {
-          from_time: formatDateTimeLocal(newStart),
-          to_time: formatDateTimeLocal(newEnd)
-        };
-        // Job Cards strictly retain their assigned workstation
+      const formattedStart = type === 'jobcard' ? formatDateTimeLocal(newStart) : formatDateLocal(newStart);
+      const formattedEnd = type === 'jobcard' ? formatDateTimeLocal(newEnd) : formatDateLocal(newEnd);
 
-        const response = await fetch(`${API_URL}/job-cards/${docName}/reschedule`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        });
+      const response = await fetch(`${API_URL}/schedule/sync-reschedule`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: type,
+          docName: docName,
+          start: formattedStart,
+          end: formattedEnd,
+          workOrderId: workOrder
+        })
+      });
 
-        if (!response.ok) {
-          const errData = await response.json().catch(() => ({}));
-          throw new Error(errData.error || errData.message || 'Failed to reschedule Job Card');
-        }
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || errData.message || 'Failed to reschedule');
+      }
 
-        showToast(`✓ Job Card ${docName} rescheduled to ${newStart.toLocaleDateString()}`);
-      } else if (type === 'workorder') {
-        const body = {
-          planned_start_date: formatDateLocal(newStart),
-          planned_end_date: formatDateLocal(newEnd)
-        };
-        if (newWorkstation && newWorkstation !== 'Unassigned') {
-          body.workstation = newWorkstation;
-        }
+      const resData = await response.json();
+      const newDateStr = newStart.toLocaleDateString();
 
-        const response = await fetch(`${API_URL}/work-orders/${docName}/reschedule`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        });
-
-        if (!response.ok) {
-          const errData = await response.json().catch(() => ({}));
-          throw new Error(errData.error || errData.message || 'Failed to reschedule Work Order');
-        }
-
-        showToast(`✓ Work Order ${docName} updated`);
+      if (type === 'workorder') {
+        const jcCount = resData.data?.updatedJobCards?.length || 0;
+        showToast(`✓ Product '${itemCode}' (WO: ${docName} & ${jcCount} linked Job Cards) rescheduled to ${newDateStr}`);
+      } else {
+        const hasParentWO = resData.data?.parentWorkOrder;
+        showToast(`✓ Product '${itemCode}' [JC: ${docName}]${hasParentWO ? ` & parent WO: ${hasParentWO.name}` : ''} rescheduled to ${newDateStr}`);
       }
 
       await fetchSchedule();
@@ -326,6 +290,52 @@ const Scheduler = () => {
     } finally {
       setSyncing(false);
     }
+  };
+
+  // FullCalendar Custom Event Card Renderer
+  const renderEventContent = (eventInfo) => {
+    const ext = eventInfo.event.extendedProps || {};
+    const isJobCard = ext.type === 'jobcard';
+    const itemCode = ext.itemCode || ext.raw?.production_item || ext.docName;
+    const woName = ext.workOrder || (ext.type === 'workorder' ? ext.docName : null);
+    const qty = ext.qty || ext.raw?.for_quantity || ext.raw?.qty;
+    const operation = ext.operation;
+    const station = ext.workstation;
+    const status = ext.status;
+
+    return (
+      <div
+        className={`fc-custom-event-node ${isJobCard ? 'fc-node-jc' : 'fc-node-wo'}`}
+        title={`[${ext.type ? ext.type.toUpperCase() : 'EVENT'}] ${itemCode}\nWork Order: ${woName || 'N/A'}\nDoc: ${ext.docName}\nQty: ${qty || 'N/A'}\nOperation: ${operation || 'N/A'}\nWorkstation: ${station || 'N/A'}\nStatus: ${status || 'N/A'}`}
+      >
+        <div className="fc-event-header-row">
+          <span className="fc-event-item-name">{itemCode}</span>
+          {qty !== undefined && qty !== null && qty !== '' && (
+            <span className="fc-event-qty-pill">{qty}</span>
+          )}
+        </div>
+
+        <div className="fc-event-meta-row">
+          {woName && (
+            <span className="fc-event-wo-pill">WO: {woName}</span>
+          )}
+          {isJobCard && (
+            <span className="fc-event-jc-pill">JC: {ext.docName}</span>
+          )}
+        </div>
+
+        {(operation || (station && station !== 'Unassigned')) && (
+          <div className="fc-event-footer-row">
+            {station && station !== 'Unassigned' && (
+              <span className="fc-event-station-pill">{station}</span>
+            )}
+            {operation && (
+              <span className="fc-event-op-pill">{operation}</span>
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
 
   // FullCalendar event drop handler
@@ -621,8 +631,9 @@ const Scheduler = () => {
 
   const openDoc = (type, docName) => {
     if (!docName || docName === 'Unassigned') return;
-    let docType = 'work-order';
+    let docType;
     if (type === 'jobcard') docType = 'job-card';
+    else if (type === 'workorder') docType = 'work-order';
     else if (type === 'workstation') docType = 'workstation';
     else docType = type;
     window.open(`http://localhost:8080/app/${docType}/${encodeURIComponent(docName)}`, '_blank');
@@ -960,6 +971,7 @@ const Scheduler = () => {
               }}
               events={filteredEvents}
               editable={true}
+              eventContent={renderEventContent}
               eventDrop={handleFullCalendarDrop}
               eventResize={handleFullCalendarDrop}
               eventDisplay="block"
