@@ -246,6 +246,29 @@ app.post('/api/work-orders', async (req, res) => {
       });
     }
 
+    // Fetch BOM operations so that ERPNext saves the operations table on the Work Order.
+    // Without this, the operations table is empty in REST creation, causing ERPNext to create 0 Job Cards upon submission.
+    let woOperations = [];
+    try {
+      const bomResp = await erpnextAPI.get(`/BOM/${bom_no}`);
+      const bomData = bomResp.data.data;
+      if (Array.isArray(bomData.operations) && bomData.operations.length > 0) {
+        woOperations = bomData.operations.map(op => ({
+          operation: op.operation,
+          workstation: (workstation && workstation !== 'Unassigned') ? workstation : (op.workstation || ''),
+          workstation_type: op.workstation_type || '',
+          time_in_mins: op.time_in_mins || 0,
+          sequence_id: op.sequence_id || 1,
+          bom: bom_no,
+          description: op.description || op.operation || '',
+          hour_rate: op.hour_rate || 0,
+          batch_size: op.batch_size || 1
+        }));
+      }
+    } catch (bomErr) {
+      console.warn(`Could not fetch BOM ${bom_no} operations:`, bomErr.message);
+    }
+
     const payload = {
       production_item,
       bom_no,
@@ -259,6 +282,9 @@ app.post('/api/work-orders', async (req, res) => {
       skip_transfer: 0
     };
 
+    if (woOperations.length > 0) {
+      payload.operations = woOperations;
+    }
     if (workstation) payload.workstation = workstation;
     if (sales_order) payload.sales_order = sales_order;
     if (description) payload.description = description;
@@ -267,7 +293,7 @@ app.post('/api/work-orders', async (req, res) => {
     const newWO = response.data.data;
 
     // Save the intended workstation in the in-memory map so the matrix can
-    // place this WO in the correct row even before operations are created (Draft state).
+    // place this WO in the correct row
     if (workstation) {
       woWorkstationMap[newWO.name] = workstation;
       console.log(`Saved workstation "${workstation}" for WO ${newWO.name} in memory map`);
