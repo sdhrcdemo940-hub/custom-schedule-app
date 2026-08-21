@@ -163,6 +163,7 @@ app.get('/api/work-orders', async (req, res) => {
   }
 });
 
+
 // Get single Work Order
 app.get('/api/work-orders/:id', async (req, res) => {
   try {
@@ -170,6 +171,108 @@ app.get('/api/work-orders/:id', async (req, res) => {
     res.json(response.data.data);
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Get production items (items that have BOMs)
+app.get('/api/items', async (req, res) => {
+  try {
+    const response = await erpnextAPI.get('/Item', {
+      params: {
+        fields: JSON.stringify(['name', 'item_name', 'item_group', 'stock_uom']),
+        filters: JSON.stringify([
+          ['is_stock_item', '=', 1],
+          ['disabled', '=', 0],
+          ['item_group', '=', 'Products']
+        ]),
+        limit_page_length: 500,
+        order_by: 'name asc'
+      }
+    });
+    res.json(response.data.data || []);
+  } catch (error) {
+    console.error('Error fetching items:', error.response ? error.response.data : error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get BOMs for a specific item
+app.get('/api/boms', async (req, res) => {
+  try {
+    const { item } = req.query;
+    const filters = [['docstatus', '=', 1], ['is_active', '=', 1]];
+    if (item) filters.push(['item', '=', item]);
+
+    const response = await erpnextAPI.get('/BOM', {
+      params: {
+        fields: JSON.stringify(['name', 'item', 'item_name', 'quantity', 'is_default']),
+        filters: JSON.stringify(filters),
+        limit_page_length: 100,
+        order_by: 'is_default desc, name asc'
+      }
+    });
+    res.json(response.data.data || []);
+  } catch (error) {
+    console.error('Error fetching BOMs:', error.response ? error.response.data : error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create a new Work Order
+app.post('/api/work-orders', async (req, res) => {
+  try {
+    const {
+      production_item,
+      bom_no,
+      qty,
+      planned_start_date,
+      planned_end_date,
+      company,
+      wip_warehouse,
+      fg_warehouse,
+      sales_order,
+      description
+    } = req.body;
+
+    if (!production_item || !bom_no || !qty || !planned_start_date) {
+      return res.status(400).json({
+        success: false,
+        error: 'production_item, bom_no, qty, and planned_start_date are required'
+      });
+    }
+
+    const payload = {
+      production_item,
+      bom_no,
+      qty: Number(qty),
+      planned_start_date,
+      planned_end_date: planned_end_date || planned_start_date,
+      company: company || 'SHRDC Demo',
+      wip_warehouse: wip_warehouse || 'Work In Progress - SD',
+      fg_warehouse: fg_warehouse || 'Finished Goods - SD',
+      use_multi_level_bom: 1,
+      skip_transfer: 0
+    };
+
+    if (sales_order) payload.sales_order = sales_order;
+    if (description) payload.description = description;
+
+    const response = await erpnextAPI.post('/Work Order', payload);
+    const newWO = response.data.data;
+
+    res.json({
+      success: true,
+      message: `Work Order ${newWO.name} created successfully`,
+      data: newWO
+    });
+  } catch (error) {
+    console.error('Create Work Order error:', error.response ? error.response.data : error.message);
+    const erpData = error.response ? error.response.data : null;
+    res.status(500).json({
+      success: false,
+      error: erpData?.message || error.message,
+      details: erpData
+    });
   }
 });
 

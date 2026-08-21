@@ -57,6 +57,20 @@ const Scheduler = () => {
   const [draggedEvent, setDraggedEvent] = useState(null);
   const [dragOverCell, setDragOverCell] = useState(null);
 
+  // ── Create Work Order Modal State ──
+  const [createWOModal, setCreateWOModal] = useState(null); // null | { date, workstation }
+  const [woItems, setWoItems] = useState([]);
+  const [woBoms, setWoBoms] = useState([]);
+  const [woSubmitting, setWoSubmitting] = useState(false);
+  const [woForm, setWoForm] = useState({
+    production_item: '',
+    bom_no: '',
+    qty: '',
+    planned_start_date: '',
+    planned_end_date: '',
+    description: ''
+  });
+
   const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3500/api';
 
   useEffect(() => {
@@ -101,6 +115,78 @@ const Scheduler = () => {
     setTimeout(() => {
       setToastMessage(null);
     }, 4000);
+  };
+
+  // ── Create Work Order helpers ──
+  const openCreateWOModal = async (date, workstation) => {
+    const pad = v => String(v).padStart(2, '0');
+    const dateStr = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    setWoForm({
+      production_item: '',
+      bom_no: '',
+      qty: '',
+      planned_start_date: dateStr,
+      planned_end_date: dateStr,
+      description: ''
+    });
+    setWoBoms([]);
+    setCreateWOModal({ date, workstation });
+    // Fetch items if not already loaded
+    if (woItems.length === 0) {
+      try {
+        const r = await fetch(`${API_URL}/items`);
+        const data = await r.json();
+        setWoItems(Array.isArray(data) ? data : []);
+      } catch (e) {
+        console.error('Failed to load items', e);
+      }
+    }
+  };
+
+  const handleWOItemChange = async (itemCode) => {
+    setWoForm(f => ({ ...f, production_item: itemCode, bom_no: '' }));
+    setWoBoms([]);
+    if (!itemCode) return;
+    try {
+      const r = await fetch(`${API_URL}/boms?item=${encodeURIComponent(itemCode)}`);
+      const data = await r.json();
+      const boms = Array.isArray(data) ? data : [];
+      setWoBoms(boms);
+      // Auto-select default BOM
+      const defaultBom = boms.find(b => b.is_default) || boms[0];
+      if (defaultBom) setWoForm(f => ({ ...f, bom_no: defaultBom.name }));
+    } catch (e) {
+      console.error('Failed to load BOMs', e);
+    }
+  };
+
+  const handleWOFormChange = (field, value) => {
+    setWoForm(f => ({ ...f, [field]: value }));
+  };
+
+  const handleCreateWOSubmit = async (e) => {
+    e.preventDefault();
+    if (!woForm.production_item || !woForm.bom_no || !woForm.qty || !woForm.planned_start_date) {
+      showToast('Please fill all required fields', true);
+      return;
+    }
+    setWoSubmitting(true);
+    try {
+      const resp = await fetch(`${API_URL}/work-orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(woForm)
+      });
+      const result = await resp.json();
+      if (!resp.ok || !result.success) throw new Error(result.error || 'Failed to create Work Order');
+      showToast(`✓ ${result.message}`);
+      setCreateWOModal(null);
+      await fetchSchedule();
+    } catch (err) {
+      showToast(`✗ ${err.message}`, true);
+    } finally {
+      setWoSubmitting(false);
+    }
   };
 
   const parseDateTime = (value) => {
@@ -890,6 +976,12 @@ const Scheduler = () => {
                               onDragOver={(e) => handleCellDragOver(e, cellKey, stationName)}
                               onDragLeave={(e) => handleCellDragLeave(e, cellKey)}
                               onDrop={(e) => handleCellDrop(e, day, stationName)}
+                              onClick={(e) => {
+                                // Only open modal if the click was on the empty cell (not on a card)
+                                if (e.target.closest('.prod-card')) return;
+                                openCreateWOModal(day, stationName);
+                              }}
+                              title={`Click to create a Work Order on ${day.toLocaleDateString()}`}
                             >
                               <div className="cell-events-container">
                                 {cellEvents.map(ev => {
@@ -1021,6 +1113,127 @@ const Scheduler = () => {
           💡 <strong>Tip:</strong> Drag and drop any card to reschedule production dates. Job Cards strictly maintain their fixed machine/workstation assignments.
         </div>
       </footer>
+
+      {/* ================= CREATE WORK ORDER MODAL ================= */}
+      {createWOModal && (
+        <div className="wo-modal-overlay" onClick={(e) => { if (e.target.classList.contains('wo-modal-overlay')) setCreateWOModal(null); }}>
+          <div className="wo-modal">
+            <div className="wo-modal-header">
+              <div className="wo-modal-title">
+                <span className="wo-modal-icon">🏭</span>
+                <div>
+                  <h2>Create Work Order</h2>
+                  <p className="wo-modal-subtitle">
+                    {createWOModal.workstation !== 'Unassigned' ? `📍 ${createWOModal.workstation} · ` : ''}
+                    📅 {createWOModal.date.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                  </p>
+                </div>
+              </div>
+              <button className="wo-modal-close" onClick={() => setCreateWOModal(null)} title="Close">✕</button>
+            </div>
+
+            <form className="wo-modal-form" onSubmit={handleCreateWOSubmit}>
+              {/* Item */}
+              <div className="wo-form-group">
+                <label className="wo-form-label">Production Item <span className="req">*</span></label>
+                <select
+                  className="wo-form-select"
+                  value={woForm.production_item}
+                  onChange={e => handleWOItemChange(e.target.value)}
+                  required
+                >
+                  <option value="">— Select Item —</option>
+                  {woItems.map(item => (
+                    <option key={item.name} value={item.name}>
+                      {item.name}{item.item_name && item.item_name !== item.name ? ` – ${item.item_name}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* BOM */}
+              <div className="wo-form-group">
+                <label className="wo-form-label">Bill of Materials (BOM) <span className="req">*</span></label>
+                <select
+                  className="wo-form-select"
+                  value={woForm.bom_no}
+                  onChange={e => handleWOFormChange('bom_no', e.target.value)}
+                  required
+                  disabled={!woForm.production_item || woBoms.length === 0}
+                >
+                  <option value="">{woForm.production_item ? (woBoms.length === 0 ? 'No active BOMs found' : '— Select BOM —') : '— Select an Item first —'}</option>
+                  {woBoms.map(bom => (
+                    <option key={bom.name} value={bom.name}>
+                      {bom.name}{bom.is_default ? ' ★ Default' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Quantity */}
+              <div className="wo-form-group">
+                <label className="wo-form-label">Quantity to Manufacture <span className="req">*</span></label>
+                <input
+                  className="wo-form-input"
+                  type="number"
+                  min="1"
+                  step="any"
+                  placeholder="e.g. 100"
+                  value={woForm.qty}
+                  onChange={e => handleWOFormChange('qty', e.target.value)}
+                  required
+                />
+              </div>
+
+              {/* Dates */}
+              <div className="wo-form-row">
+                <div className="wo-form-group">
+                  <label className="wo-form-label">Planned Start Date <span className="req">*</span></label>
+                  <input
+                    className="wo-form-input"
+                    type="date"
+                    value={woForm.planned_start_date}
+                    onChange={e => handleWOFormChange('planned_start_date', e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="wo-form-group">
+                  <label className="wo-form-label">Planned End Date</label>
+                  <input
+                    className="wo-form-input"
+                    type="date"
+                    value={woForm.planned_end_date}
+                    min={woForm.planned_start_date}
+                    onChange={e => handleWOFormChange('planned_end_date', e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* Description (optional) */}
+              <div className="wo-form-group">
+                <label className="wo-form-label">Description <span className="optional">(optional)</span></label>
+                <textarea
+                  className="wo-form-input wo-form-textarea"
+                  rows="2"
+                  placeholder="Additional notes..."
+                  value={woForm.description}
+                  onChange={e => handleWOFormChange('description', e.target.value)}
+                />
+              </div>
+
+              {/* Actions */}
+              <div className="wo-modal-actions">
+                <button type="button" className="wo-btn-cancel" onClick={() => setCreateWOModal(null)} disabled={woSubmitting}>
+                  Cancel
+                </button>
+                <button type="submit" className="wo-btn-submit" disabled={woSubmitting}>
+                  {woSubmitting ? <span className="spin">⏳</span> : '🏭'} {woSubmitting ? 'Creating...' : 'Create Work Order'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
