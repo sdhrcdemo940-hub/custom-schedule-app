@@ -1001,32 +1001,29 @@ const Scheduler = () => {
                                       style={{ borderLeftColor: ev.backgroundColor || '#2563eb' }}
                                       title={`[${ext.type.toUpperCase()}] ${ext.docName}\nItem: ${itemCode}\nQty: ${qty}\nOperation: ${ext.operation || 'N/A'}\nStatus: ${ext.status}\nWork Order: ${ext.workOrder || 'N/A'}\nTime: ${ev.start ? ev.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''} - ${ev.end ? ev.end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}\n\n👉 Click to open in ERPNext\n👉 Drag to reschedule`}
                                     >
-                                      {/* Full WO or JC Document Name Row */}
-                                      <div className="prod-card-id-row">
-                                        <span className={`prod-doc-id-badge ${isJobCard ? 'badge-jc' : 'badge-wo'}`}>
-                                          {isJobCard ? `JC: ${ext.docName}` : `WO: ${ext.docName}`}
-                                        </span>
-                                      </div>
-
-                                      {/* Primary Row: Item Code & Quantity in Red */}
-                                      <div className="prod-card-main">
+                                      {/* Primary Row: Item Code & Quantity */}
+                                      <div className="prod-card-main" style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '4px' }}>
                                         <span className="prod-item-code">{itemCode}</span>
                                         {qty !== undefined && qty !== null && qty !== '' && (
                                           <span className="prod-qty-badge"> : {qty}</span>
                                         )}
                                       </div>
 
-                                      {/* Secondary Details: Operation & Parent Work Order */}
-                                      {(ext.operation || (isJobCard && ext.workOrder)) && (
-                                        <div className="prod-card-sub">
-                                          {ext.operation && (
-                                            <span className="prod-op-tag">{ext.operation}</span>
-                                          )}
-                                          {isJobCard && ext.workOrder && (
-                                            <span className="prod-parent-wo-tag">WO: {ext.workOrder}</span>
-                                          )}
-                                        </div>
-                                      )}
+                                      {/* Secondary Details: Work Order and Job Card Names */}
+                                      <div className="prod-card-sub" style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                        {isJobCard ? (
+                                          <>
+                                            {ext.workOrder && <span className="prod-parent-wo-tag" style={{ fontSize: '11px', color: '#475569' }}>WO: {ext.workOrder}</span>}
+                                            <span className="prod-doc-id-badge badge-jc" style={{ alignSelf: 'flex-start' }}>JC: {ext.docName}</span>
+                                          </>
+                                        ) : (
+                                          <span className="prod-doc-id-badge badge-wo" style={{ alignSelf: 'flex-start' }}>WO: {ext.docName}</span>
+                                        )}
+                                        
+                                        {ext.operation && (
+                                          <span className="prod-op-tag" style={{ alignSelf: 'flex-start', marginTop: '2px' }}>{ext.operation}</span>
+                                        )}
+                                      </div>
 
                                       {/* Status dot */}
                                       <span
