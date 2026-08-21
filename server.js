@@ -26,6 +26,10 @@ const erpnextAPI = axios.create({
   }
 });
 
+// In-memory map: { workOrderName -> workstationName }
+// Used to persist the intended workstation for draft WOs that have no operations yet.
+const woWorkstationMap = {};
+
 const normalizeJobCardTimes = (jobCard) => {
   const scheduledLogs = Array.isArray(jobCard.scheduled_time_logs) ? jobCard.scheduled_time_logs : [];
   const scheduled = scheduledLogs[0] || {};
@@ -222,6 +226,7 @@ app.get('/api/boms', async (req, res) => {
 app.post('/api/work-orders', async (req, res) => {
   try {
     const {
+      workstation,
       production_item,
       bom_no,
       qty,
@@ -254,11 +259,63 @@ app.post('/api/work-orders', async (req, res) => {
       skip_transfer: 0
     };
 
+    if (workstation) payload.workstation = workstation;
     if (sales_order) payload.sales_order = sales_order;
     if (description) payload.description = description;
 
     const response = await erpnextAPI.post('/Work Order', payload);
     const newWO = response.data.data;
+
+    // Save the intended workstation in the in-memory map so the matrix can
+    // place this WO in the correct row even before operations are created (Draft state).
+    if (workstation) {
+      woWorkstationMap[newWO.name] = workstation;
+      console.log(`Saved workstation "${workstation}" for WO ${newWO.name} in memory map`);
+    }
+
+    // If a workstation is specified, immediately override every operation's workstation
+    // on the Work Order's operations child table, AND any already-created Job Cards.
+    if (workstation) {
+      // Step 1: Fetch the full WO document to get its operations child table
+      try {
+        const woFull = (await erpnextAPI.get(`/Work Order/${newWO.name}`)).data.data;
+        const operations = Array.isArray(woFull.operations) ? woFull.operations : [];
+
+        if (operations.length > 0) {
+          // Override every operation's workstation
+          const updatedOps = operations.map(op => ({
+            ...op,
+            workstation: workstation
+          }));
+          await erpnextAPI.put(`/Work Order/${newWO.name}`, { operations: updatedOps });
+          console.log(`Overrode workstation to "${workstation}" on ${operations.length} operation(s) of WO ${newWO.name}`);
+        }
+      } catch (e) {
+        console.warn('Failed to override operations workstation on Work Order', newWO.name, e.message);
+      }
+
+      // Step 2: Also update any Job Cards already linked (in case ERPNext created them on insert)
+      try {
+        const jcListResp = await erpnextAPI.get('/Job Card', {
+          params: {
+            fields: JSON.stringify(['name']),
+            filters: JSON.stringify([
+              ['work_order', '=', newWO.name]
+            ]),
+            limit_page_length: 500
+          }
+        });
+        const jobCardNames = (jcListResp.data.data || []).map(r => r.name);
+        if (jobCardNames.length > 0) {
+          await Promise.all(jobCardNames.map(async (jcName) => {
+            await erpnextAPI.put(`/Job Card/${jcName}`, { workstation });
+          }));
+          console.log(`Set workstation to "${workstation}" on ${jobCardNames.length} Job Card(s) for WO ${newWO.name}`);
+        }
+      } catch (e) {
+        console.warn('Failed to set workstation on Job Cards for Work Order', newWO.name, e.message);
+      }
+    }
 
     res.json({
       success: true,
@@ -278,13 +335,35 @@ app.post('/api/work-orders', async (req, res) => {
 
 
 // Helper: Synchronize reschedule for Work Order and its linked Job Cards
-const syncRescheduleWorkOrder = async (workOrderId, planned_start_date, planned_end_date) => {
+const syncRescheduleWorkOrder = async (workOrderId, planned_start_date, planned_end_date, workstation) => {
   // 1. Update the Work Order itself
-  const woResp = await erpnextAPI.put(`/Work Order/${workOrderId}`, {
+  const woPayload = {
     planned_start_date: planned_start_date,
     planned_end_date: planned_end_date
-  });
+  };
+  if (workstation && workstation !== 'Unassigned') {
+    woPayload.workstation = workstation;
+    woWorkstationMap[workOrderId] = workstation;
+  }
+  const woResp = await erpnextAPI.put(`/Work Order/${workOrderId}`, woPayload);
   const updatedWO = woResp.data.data;
+
+  // If a workstation is specified, update operations child table
+  if (workstation && workstation !== 'Unassigned') {
+    try {
+      const woFull = (await erpnextAPI.get(`/Work Order/${workOrderId}`)).data.data;
+      const operations = Array.isArray(woFull.operations) ? woFull.operations : [];
+      if (operations.length > 0) {
+        const updatedOps = operations.map(op => ({
+          ...op,
+          workstation: workstation
+        }));
+        await erpnextAPI.put(`/Work Order/${workOrderId}`, { operations: updatedOps });
+      }
+    } catch (e) {
+      console.warn('Failed to update operations for Work Order', workOrderId, e.message);
+    }
+  }
 
   // 2. Fetch all Job Cards linked to this Work Order
   let updatedJobCards = [];
@@ -326,6 +405,9 @@ const syncRescheduleWorkOrder = async (workOrderId, planned_start_date, planned_
           }
 
           await updateJobCardSchedule(jc.name, fromTimeStr, toTimeStr);
+          if (workstation && workstation !== 'Unassigned') {
+            await erpnextAPI.put(`/Job Card/${jc.name}`, { workstation });
+          }
           updatedJobCards.push(jc.name);
         } catch (jcErr) {
           console.warn(`Could not sync Job Card ${jc.name}:`, jcErr.message);
@@ -427,14 +509,14 @@ app.put('/api/work-orders/:id/reschedule', async (req, res) => {
 // Unified Synchronized Reschedule Endpoint
 app.put('/api/schedule/sync-reschedule', async (req, res) => {
   try {
-    const { type, docName, start, end, workOrderId } = req.body;
+    const { type, docName, start, end, workOrderId, workstation } = req.body;
 
     if (!type || !docName) {
       return res.status(400).json({ success: false, error: 'type and docName are required' });
     }
 
     if (type === 'workorder') {
-      const result = await syncRescheduleWorkOrder(docName, start, end || start);
+      const result = await syncRescheduleWorkOrder(docName, start, end || start, workstation);
       return res.json({
         success: true,
         message: `Work Order ${docName} and ${result.updatedJobCards.length} linked Job Card(s) updated`,
@@ -537,10 +619,20 @@ app.get('/api/schedule', async (req, res) => {
       }
     }));
 
+    // Overlay the in-memory workstation map onto WO data so Draft WOs
+    // (which have no operations yet) still appear in the correct matrix row.
+    const workOrdersWithStation = workOrdersDetails.filter(Boolean).map(wo => {
+      const mappedStation = woWorkstationMap[wo.name];
+      if (mappedStation && !wo.workstation) {
+        return { ...wo, workstation: mappedStation };
+      }
+      return wo;
+    });
+
     res.json({
       workstations: workstations,
       jobCards: jobCardsDetails.filter(Boolean),
-      workOrders: workOrdersDetails.filter(Boolean)
+      workOrders: workOrdersWithStation
     });
   } catch (error) {
     console.error('Error fetching schedule:', error.response ? error.response.data : error.message);

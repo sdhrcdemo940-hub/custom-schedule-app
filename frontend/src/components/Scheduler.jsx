@@ -172,10 +172,15 @@ const Scheduler = () => {
     }
     setWoSubmitting(true);
     try {
+      const payload = { ...woForm };
+      if (createWOModal.workstation && createWOModal.workstation !== 'Unassigned') {
+        payload.workstation = createWOModal.workstation;
+      }
+
       const resp = await fetch(`${API_URL}/work-orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(woForm)
+        body: JSON.stringify(payload)
       });
       const result = await resp.json();
       if (!resp.ok || !result.success) throw new Error(result.error || 'Failed to create Work Order');
@@ -249,7 +254,12 @@ const Scheduler = () => {
         const qty = wo.qty || '';
         const startTime = parseDateTime(wo.planned_start_date || wo.creation);
         const endTime = parseDateTime(wo.planned_end_date || wo.planned_start_date || wo.creation);
-        const station = (wo.workstation || wo.workstation_name || 'Unassigned').trim();
+        // Derive workstation: check top-level field first, then fall back to the
+        // first operation's workstation (ERPNext stores it there, not at WO root level)
+        const firstOpWorkstation = Array.isArray(wo.operations) && wo.operations.length > 0
+          ? (wo.operations[0].workstation || '').trim()
+          : '';
+        const station = (wo.workstation || wo.workstation_name || firstOpWorkstation || 'Unassigned').trim();
         const opCount = Array.isArray(wo.operations) ? wo.operations.length : 0;
         const opSummary = opCount > 0 ? `${opCount} ops` : '';
         const title = `${itemCode}${qty ? ` (${qty} kg)` : ''} | WO: ${wo.name}${opSummary ? ` (${opSummary})` : ''}`;
@@ -349,7 +359,8 @@ const Scheduler = () => {
           docName: docName,
           start: formattedStart,
           end: formattedEnd,
-          workOrderId: workOrder
+          workOrderId: workOrder,
+          workstation: newWorkstation
         })
       });
 
@@ -465,9 +476,8 @@ const Scheduler = () => {
       if (name) set.add(name);
     });
 
-    // Add stations from Job Card events only — WOs don't own a single workstation
+    // Add stations from events (both Job Cards and Work Orders)
     events.forEach(e => {
-      if (e.extendedProps?.type !== 'jobcard') return;
       const w = (e.extendedProps?.workstation || '').trim();
       if (w && w !== 'Unassigned') {
         if (hideOffStations && offStationNames.has(w)) return;
@@ -477,14 +487,13 @@ const Scheduler = () => {
 
     const list = Array.from(set).sort();
 
-    // Include Unassigned row only if there are unassigned Job Cards
-    const hasUnassignedJC = events.some(e => {
-      if (e.extendedProps?.type !== 'jobcard') return false;
+    // Include Unassigned row only if there are unassigned events
+    const hasUnassigned = events.some(e => {
       const w = (e.extendedProps?.workstation || '').trim();
       return !w || w === 'Unassigned';
     });
 
-    if (hasUnassignedJC) {
+    if (hasUnassigned) {
       list.push('Unassigned');
     }
     return list;
@@ -592,10 +601,9 @@ const Scheduler = () => {
     });
   }, [events, viewFilter, statusFilter, searchQuery]);
 
-  // Matrix events — always Job Cards only (WOs are not workstation-specific)
+  // Matrix events — shows both Job Cards and Work Orders
   const matrixEvents = useMemo(() => {
     return events.filter(e => {
-      if (e.extendedProps?.type !== 'jobcard') return false;
       // Status filter
       if (statusFilter !== 'all' && (e.extendedProps?.status || '').toLowerCase() !== statusFilter.toLowerCase()) {
         return false;
@@ -710,8 +718,9 @@ const Scheduler = () => {
       newEnd = new Date(newStart.getTime() + durationMs);
     }
 
-    // Job Cards strictly retain their assigned workstation
-    await rescheduleEvent(ev, newStart, newEnd, originalWs);
+    // Job Cards strictly retain their assigned workstation, Work Orders can change workstation
+    const targetWs = isJobCard ? originalWs : targetWorkstation.trim();
+    await rescheduleEvent(ev, newStart, newEnd, targetWs);
     setDraggedEvent(null);
   };
 
@@ -922,10 +931,16 @@ const Scheduler = () => {
                 {/* Table Body: Station Rows */}
                 <tbody>
                   {workstationList.map((stationName) => {
-                    // Count total events for this station in this month (Job Cards only)
+                    // Count total events for this station in this month
                     const stationMonthEvents = matrixEvents.filter(e => {
                       const ws = (e.extendedProps?.workstation || 'Unassigned').trim();
                       if (ws !== stationName) return false;
+                      const isWO = e.extendedProps?.type === 'workorder';
+                      if (isWO) {
+                        const s = e.start instanceof Date ? e.start : new Date(e.start);
+                        if (isNaN(s.getTime())) return false;
+                        return monthDays.some(d => s.getFullYear() === d.getFullYear() && s.getMonth() === d.getMonth() && s.getDate() === d.getDate());
+                      }
                       return monthDays.some(d => eventIntersectsDay(e, d));
                     });
 
@@ -961,11 +976,24 @@ const Scheduler = () => {
                           const cellKey = `${stationName}::${day.toISOString()}`;
                           const isDragOver = dragOverCell === cellKey;
 
-                          // Find all Job Card events for this station that fall on this day
+                          // Find events for this station on this day.
+                          // Job Cards: show on any day they intersect.
+                          // Work Orders: show ONLY on their start date to avoid
+                          //   duplicate cards when a WO spans multiple days.
                           const cellEvents = matrixEvents.filter(e => {
                             const ws = (e.extendedProps?.workstation || 'Unassigned').trim();
                             if (ws !== stationName) return false;
+                            const isWO = e.extendedProps?.type === 'workorder';
+                            if (isWO) {
+                              // Pin WO card to its start date only
+                              const s = e.start instanceof Date ? e.start : new Date(e.start);
+                              if (isNaN(s.getTime())) return false;
+                              return s.getFullYear() === day.getFullYear() &&
+                                s.getMonth() === day.getMonth() &&
+                                s.getDate() === day.getDate();
+                            }
                             return eventIntersectsDay(e, day);
+
                           });
 
                           return (
