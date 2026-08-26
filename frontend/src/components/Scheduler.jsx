@@ -513,15 +513,6 @@ const Scheduler = () => {
       if (name) set.add(name);
     });
 
-    // Add stations from events (both Job Cards and Work Orders)
-    events.forEach(e => {
-      const w = (e.extendedProps?.workstation || '').trim();
-      if (w && w !== 'Unassigned') {
-        if (hideOffStations && offStationNames.has(w)) return;
-        set.add(w);
-      }
-    });
-
     const list = Array.from(set).sort();
 
     // Include Unassigned row only if there are unassigned events
@@ -534,7 +525,7 @@ const Scheduler = () => {
       list.push('Unassigned');
     }
     return list;
-  }, [backendWorkstations, events, hideOffStations, offStationNames]);
+  }, [backendWorkstations, events, hideOffStations]);
 
   // Generate all days in the currently selected month
   const monthDays = useMemo(() => {
@@ -778,10 +769,19 @@ const Scheduler = () => {
       {/* Top Application Bar */}
       <header className="production-header">
         <div className="header-left">
-          <div className="logo-badge">PROD</div>
+          <div className="header-brand-badge">
+            <svg className="header-brand-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+              <polyline points="2 17 12 22 22 17"></polyline>
+              <polyline points="2 12 12 17 22 12"></polyline>
+            </svg>
+          </div>
           <div>
-            <h1 className="header-title">MONTHLY PRODUCTION SCHEDULE</h1>
-            <div className="header-subtitle">ERPNext v16 Interactive Work Order & Job Card Scheduler</div>
+            <div className="header-title-wrapper">
+              <h1 className="header-title">MONTHLY PRODUCTION SCHEDULE</h1>
+              <span className="header-version-tag">v16 Engine</span>
+            </div>
+            <div className="header-subtitle">ERPNext v16 Interactive Work Order & Job Card Dispatch Board</div>
           </div>
         </div>
 
@@ -791,19 +791,36 @@ const Scheduler = () => {
             className={`tab-btn ${activeTab === 'matrix' ? 'active' : ''}`}
             onClick={() => setActiveTab('matrix')}
           >
-            📊 Workstation Matrix (Month)
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="tab-icon-svg">
+              <rect x="3" y="3" width="7" height="7"></rect>
+              <rect x="14" y="3" width="7" height="7"></rect>
+              <rect x="14" y="14" width="7" height="7"></rect>
+              <rect x="3" y="14" width="7" height="7"></rect>
+            </svg>
+            <span>Workstation Matrix</span>
           </button>
           <button
             className={`tab-btn ${activeTab === 'calendar' ? 'active' : ''}`}
             onClick={() => setActiveTab('calendar')}
           >
-            📅 Calendar View
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="tab-icon-svg">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="16" y1="2" x2="16" y2="6"></line>
+              <line x1="8" y1="2" x2="8" y2="6"></line>
+              <line x1="3" y1="10" x2="21" y2="10"></line>
+            </svg>
+            <span>Calendar View</span>
           </button>
         </div>
 
         <div className="header-right">
           <button onClick={fetchSchedule} className="btn-action btn-refresh" disabled={loading || syncing} title="Refresh data from ERPNext">
-            <span className={loading || syncing ? 'spin' : ''}>🔄</span> {loading ? 'Loading...' : syncing ? 'Saving...' : 'Sync ERPNext'}
+            <svg className={`btn-icon-svg ${loading || syncing ? 'spin' : ''}`} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <polyline points="1 20 1 14 7 14"></polyline>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+            <span>{loading ? 'Loading...' : syncing ? 'Saving...' : 'Sync ERPNext'}</span>
           </button>
         </div>
       </header>
@@ -832,7 +849,10 @@ const Scheduler = () => {
         {/* Search & Filters */}
         <div className="filters-group">
           <div className="search-box">
-            <span className="search-icon">🔍</span>
+            <svg className="search-icon-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
             <input
               type="text"
               placeholder="Search Item, WO, Station, Operation..."
@@ -866,6 +886,8 @@ const Scheduler = () => {
             <option value="in progress">In Progress</option>
             <option value="completed">Completed</option>
           </select>
+
+          {/* // Turning off the hide off-status toggle.  */}
 
           {/* Hide Off-Status Workstations Toggle (Matrix View only)
           {activeTab === 'matrix' && (
@@ -918,7 +940,12 @@ const Scheduler = () => {
                     <th className="th-station-sticky">
                       <div className="station-header-box">
                         <div className="station-th-title-group">
-                          <span className="station-th-icon">🏭</span>
+                          <span className="station-th-icon">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                              <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+                              <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+                            </svg>
+                          </span>
                           <span className="station-th-title">WORKSTATION / LINE</span>
                         </div>
                         <span className="station-count-badge">{workstationList.length} Stations</span>
@@ -931,7 +958,15 @@ const Scheduler = () => {
                         className="th-week-group"
                       >
                         <div className="week-label-wrapper">
-                          <span className="week-label-text">🗓️ {group.label}</span>
+                          <span className="week-label-text">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="week-label-svg">
+                              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                              <line x1="16" y1="2" x2="16" y2="6"></line>
+                              <line x1="8" y1="2" x2="8" y2="6"></line>
+                              <line x1="3" y1="10" x2="21" y2="10"></line>
+                            </svg>
+                            {group.label}
+                          </span>
                         </div>
                       </th>
                     ))}
@@ -1001,9 +1036,27 @@ const Scheduler = () => {
                         >
                           <div className="station-cell-content">
                             <div className="station-name-text">
-                              <span className="station-row-icon">{isUnassigned ? '📦' : '⚙️'}</span>
+                              <span className={`station-row-icon ${isUnassigned ? 'unassigned' : ''}`} title={isUnassigned ? 'Unassigned Queue' : 'Workstation'}>
+                                {isUnassigned ? (
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                                    <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                                    <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                                  </svg>
+                                ) : (
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <circle cx="12" cy="12" r="3"></circle>
+                                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                                  </svg>
+                                )}
+                              </span>
                               <span className="station-row-title">{stationName}</span>
-                              {!isUnassigned && <span className="external-link-icon" title="Open in ERPNext">↗</span>}
+                              {!isUnassigned && (
+                                <svg className="external-link-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" title="Open in ERPNext">
+                                  <line x1="7" y1="17" x2="17" y2="7"></line>
+                                  <polyline points="7 7 17 7 17 17"></polyline>
+                                </svg>
+                              )}
                             </div>
                             {stationMonthEvents.length > 0 && (
                               <span className="station-event-count" title={`${stationMonthEvents.length} scheduled order(s) this month`}>
@@ -1117,11 +1170,15 @@ const Scheduler = () => {
                                                       }}
                                                       title={`Click to open Job Card ${jc.name} in ERPNext\nOperation: ${jc.operation || 'N/A'}\nWorkstation: ${jc.workstation || 'N/A'}\nStatus: ${jc.status || 'N/A'}`}
                                                     >
-                                                      <span className="jc-item-status-dot" style={{ backgroundColor: getStatusColor(jc.status) }}></span>
                                                       <div className="jc-item-info">
                                                         <div className="jc-item-name-row">
                                                           <span className="jc-item-name">{jc.name}</span>
-                                                          {jc.status && <span className="jc-item-status-pill">{jc.status}</span>}
+                                                          {jc.status && (
+                                                            <span className="jc-item-status-pill">
+                                                              <span className="jc-item-status-dot" style={{ backgroundColor: getStatusColor(jc.status) }}></span>
+                                                              {jc.status}
+                                                            </span>
+                                                          )}
                                                         </div>
                                                         {jc.operation && (
                                                           <span className="jc-item-op">
@@ -1142,11 +1199,15 @@ const Scheduler = () => {
                                                 <div className="prod-card-jc-dropdown-menu">
                                                   {rawOps.map((op, idx) => (
                                                     <div key={idx} className="prod-card-jc-dropdown-item op-preview">
-                                                      <span className="jc-item-status-dot" style={{ backgroundColor: '#94a3b8' }}></span>
                                                       <div className="jc-item-info">
                                                         <div className="jc-item-name-row">
                                                           <span className="jc-item-name">{op.operation}</span>
-                                                          {op.time_in_mins ? <span className="jc-item-status-pill">{op.time_in_mins}m</span> : null}
+                                                          {op.time_in_mins ? (
+                                                            <span className="jc-item-status-pill">
+                                                              <span className="jc-item-status-dot" style={{ backgroundColor: '#94a3b8' }}></span>
+                                                              {op.time_in_mins}m
+                                                            </span>
+                                                          ) : null}
                                                         </div>
                                                         {op.workstation && <span className="jc-item-op">{op.workstation}</span>}
                                                       </div>

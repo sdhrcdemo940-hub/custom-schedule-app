@@ -157,9 +157,19 @@ export default function SalesForecast() {
       {/* ─── Header Bar ─── */}
       <div className="sf-topbar">
         <div className="sf-topbar-left">
-          <div className="sf-logo-badge">FCST</div>
+          <div className="sf-brand-badge">
+            <svg className="sf-brand-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="20" x2="18" y2="10"></line>
+              <line x1="12" y1="20" x2="12" y2="4"></line>
+              <line x1="6" y1="20" x2="6" y2="14"></line>
+              <path d="M4 11l5-5 5 5 6-6"></path>
+            </svg>
+          </div>
           <div>
-            <h1 className="sf-title">SALES DEMAND FORECAST</h1>
+            <div className="sf-title-row">
+              <h1 className="sf-title">SALES DEMAND FORECAST</h1>
+              <span className="sf-badge-pill">Analytics AI</span>
+            </div>
             <div className="sf-subtitle">
               ERPNext Historical Analysis &amp; 3-Month Forward Projection
             </div>
@@ -174,12 +184,21 @@ export default function SalesForecast() {
             onClick={fetchForecast}
             disabled={loading}
           >
-            <span className={loading ? 'spin' : ''}>🔄</span>
-            {loading ? 'Fetching...' : 'Refresh Data'}
+            <svg className={`btn-icon-svg ${loading ? 'spin' : ''}`} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <polyline points="1 20 1 14 7 14"></polyline>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+            <span>{loading ? 'Fetching...' : 'Refresh Data'}</span>
           </button>
           {itemData && (
             <button className="sf-btn-export" onClick={exportCSV}>
-              ⬇ Export CSV
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '5px' }}>
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              <span>Export CSV</span>
             </button>
           )}
         </div>
