@@ -207,9 +207,9 @@ const Scheduler = () => {
     try {
       const response = await fetch(`${API_URL}/schedule`);
       if (!response.ok) throw new Error(`Failed to fetch schedule (${response.statusText})`);
-      
+
       const data = await response.json();
-      
+
       if (Array.isArray(data.workstations)) {
         setBackendWorkstations(data.workstations);
       }
@@ -223,13 +223,13 @@ const Scheduler = () => {
         const qty = wo.qty || '';
         const startTime = parseDateTime(wo.planned_start_date || wo.creation);
         const endTime = parseDateTime(wo.planned_end_date || wo.planned_start_date || wo.creation);
-        
+
         // Derive workstation: top-level field first, then fallback to first op
         const firstOpWorkstation = Array.isArray(wo.operations) && wo.operations.length > 0
           ? (wo.operations[0].workstation || '').trim()
           : '';
         const station = (wo.workstation || wo.workstation_name || firstOpWorkstation || 'Unassigned').trim();
-        
+
         // Find all Job Cards linked to this Work Order
         const linkedJobCards = rawJobCards.filter(jc => jc.work_order === wo.name);
         const opCount = Array.isArray(wo.operations) ? wo.operations.length : linkedJobCards.length;
@@ -541,7 +541,7 @@ const Scheduler = () => {
     const year = activeDate.getFullYear();
     const month = activeDate.getMonth();
     const totalDays = new Date(year, month + 1, 0).getDate();
-    
+
     const days = [];
     for (let day = 1; day <= totalDays; day++) {
       const d = new Date(year, month, day, 0, 0, 0, 0);
@@ -867,7 +867,7 @@ const Scheduler = () => {
             <option value="completed">Completed</option>
           </select>
 
-          {/* Hide Off-Status Workstations Toggle (Matrix View only) */}
+          {/* Hide Off-Status Workstations Toggle (Matrix View only)
           {activeTab === 'matrix' && (
             <label className="hide-off-stations-toggle" title="Hide workstations marked as Off in ERPNext">
               <input
@@ -877,7 +877,7 @@ const Scheduler = () => {
               />
               <span>Hide Off Stations{offStationNames.size > 0 ? ` (${offStationNames.size})` : ''}</span>
             </label>
-          )}
+          )} */}
         </div>
 
         {/* Zoom Controls (For Matrix View) */}
@@ -1058,118 +1058,118 @@ const Scheduler = () => {
                             >
                               <div className="cell-events-container">
                                 {cellEvents.map(ev => {
-                                    const ext = ev.extendedProps || {};
-                                    const itemCode = ext.itemCode || ext.raw?.production_item || ext.docName;
-                                    const qty = ext.qty || ext.raw?.for_quantity || ext.raw?.qty;
-                                    const isJobCard = ext.type === 'jobcard';
-                                    const jobCards = Array.isArray(ext.jobCards) ? ext.jobCards : [];
-                                    const rawOps = Array.isArray(ext.raw?.operations) ? ext.raw.operations : [];
+                                  const ext = ev.extendedProps || {};
+                                  const itemCode = ext.itemCode || ext.raw?.production_item || ext.docName;
+                                  const qty = ext.qty || ext.raw?.for_quantity || ext.raw?.qty;
+                                  const isJobCard = ext.type === 'jobcard';
+                                  const jobCards = Array.isArray(ext.jobCards) ? ext.jobCards : [];
+                                  const rawOps = Array.isArray(ext.raw?.operations) ? ext.raw.operations : [];
 
-                                    return (
-                                      <div
-                                        key={ev.id}
-                                        draggable
-                                        onDragStart={(e) => handleDragStart(e, ev)}
-                                        onDragEnd={handleDragEnd}
-                                        onClick={() => openDoc(ext.type, ext.docName)}
-                                        className={`prod-card ${isJobCard ? 'card-jobcard' : 'card-workorder'}`}
-                                        style={{ borderLeftColor: ev.backgroundColor || '#2563eb' }}
-                                        title={`[${ext.type.toUpperCase()}] ${ext.docName}\nItem: ${itemCode}\nQty: ${qty}\nStatus: ${ext.status}\nWorkstation: ${ext.workstation || 'N/A'}${jobCards.length > 0 ? `\n\nJob Cards:\n` + jobCards.map(j => `• ${j.name}: ${j.operation || ''} (${j.status})`).join('\n') : ''}\n\n👉 Click to open in ERPNext\n👉 Drag to reschedule`}
-                                      >
-                                        {/* Primary Row: Item Code & Quantity */}
-                                        <div className="prod-card-main" style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '3px' }}>
-                                          <span className="prod-item-code">{itemCode}</span>
-                                          {qty !== undefined && qty !== null && qty !== '' && (
-                                            <span className="prod-qty-badge"> : {qty}</span>
-                                          )}
-                                        </div>
-
-                                        {/* Work Order Header Details */}
-                                        <div className="prod-card-sub" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                          {isJobCard ? (
-                                            <>
-                                              {ext.workOrder && <span className="prod-parent-wo-tag" style={{ fontSize: '11px', color: '#475569' }}>WO: {ext.workOrder}</span>}
-                                              <span className="prod-doc-id-badge badge-jc" style={{ alignSelf: 'flex-start' }}>JC: {ext.docName}</span>
-                                              {ext.operation && <span className="prod-op-tag" style={{ alignSelf: 'flex-start', marginTop: '2px' }}>{ext.operation}</span>}
-                                            </>
-                                          ) : (
-                                            <>
-                                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
-                                                <span className="prod-doc-id-badge badge-wo" style={{ alignSelf: 'flex-start' }}>WO: {ext.docName}</span>
-                                                <span className="prod-status-tag-sm" style={{ fontSize: '9px', color: '#64748b', fontWeight: '700' }}>{ext.status}</span>
-                                              </div>
-
-                                              {/* Dropdown list view of all Job Cards inside this single Work Order box */}
-                                              {jobCards.length > 0 ? (
-                                                <details className="prod-card-jc-dropdown" onClick={(e) => e.stopPropagation()}>
-                                                  <summary className="prod-card-jc-summary">
-                                                    <span className="jc-summary-label">📋 Job Cards ({jobCards.length})</span>
-                                                    <span className="jc-summary-caret">▾</span>
-                                                  </summary>
-                                                  <div className="prod-card-jc-dropdown-menu">
-                                                    {jobCards.map(jc => (
-                                                      <div
-                                                        key={jc.name}
-                                                        className="prod-card-jc-dropdown-item"
-                                                        onClick={(e) => {
-                                                          e.stopPropagation();
-                                                          openDoc('jobcard', jc.name);
-                                                        }}
-                                                        title={`Click to open Job Card ${jc.name} in ERPNext\nOperation: ${jc.operation || 'N/A'}\nWorkstation: ${jc.workstation || 'N/A'}\nStatus: ${jc.status || 'N/A'}`}
-                                                      >
-                                                        <span className="jc-item-status-dot" style={{ backgroundColor: getStatusColor(jc.status) }}></span>
-                                                        <div className="jc-item-info">
-                                                          <div className="jc-item-name-row">
-                                                            <span className="jc-item-name">{jc.name}</span>
-                                                            {jc.status && <span className="jc-item-status-pill">{jc.status}</span>}
-                                                          </div>
-                                                          {jc.operation && (
-                                                            <span className="jc-item-op">
-                                                              {jc.operation} {jc.workstation ? `· ${jc.workstation}` : ''}
-                                                            </span>
-                                                          )}
-                                                        </div>
-                                                      </div>
-                                                    ))}
-                                                  </div>
-                                                </details>
-                                              ) : rawOps.length > 0 ? (
-                                                <details className="prod-card-jc-dropdown" onClick={(e) => e.stopPropagation()}>
-                                                  <summary className="prod-card-jc-summary">
-                                                    <span className="jc-summary-label">⚙️ Ops ({rawOps.length}) · Draft</span>
-                                                    <span className="jc-summary-caret">▾</span>
-                                                  </summary>
-                                                  <div className="prod-card-jc-dropdown-menu">
-                                                    {rawOps.map((op, idx) => (
-                                                      <div key={idx} className="prod-card-jc-dropdown-item op-preview">
-                                                        <span className="jc-item-status-dot" style={{ backgroundColor: '#94a3b8' }}></span>
-                                                        <div className="jc-item-info">
-                                                          <div className="jc-item-name-row">
-                                                            <span className="jc-item-name">{op.operation}</span>
-                                                            {op.time_in_mins ? <span className="jc-item-status-pill">{op.time_in_mins}m</span> : null}
-                                                          </div>
-                                                          {op.workstation && <span className="jc-item-op">{op.workstation}</span>}
-                                                        </div>
-                                                      </div>
-                                                    ))}
-                                                  </div>
-                                                </details>
-                                              ) : (
-                                                ext.operation && (
-                                                  <span className="prod-op-tag" style={{ alignSelf: 'flex-start', marginTop: '2px' }}>{ext.operation}</span>
-                                                )
-                                              )}
-                                            </>
-                                          )}
-                                        </div>
-
-                                        {/* Status dot */}
-                                        <span
-                                          className="prod-status-dot"
-                                          style={{ backgroundColor: ev.backgroundColor }}
-                                        />
+                                  return (
+                                    <div
+                                      key={ev.id}
+                                      draggable
+                                      onDragStart={(e) => handleDragStart(e, ev)}
+                                      onDragEnd={handleDragEnd}
+                                      onClick={() => openDoc(ext.type, ext.docName)}
+                                      className={`prod-card ${isJobCard ? 'card-jobcard' : 'card-workorder'}`}
+                                      style={{ borderLeftColor: ev.backgroundColor || '#2563eb' }}
+                                      title={`[${ext.type.toUpperCase()}] ${ext.docName}\nItem: ${itemCode}\nQty: ${qty}\nStatus: ${ext.status}\nWorkstation: ${ext.workstation || 'N/A'}${jobCards.length > 0 ? `\n\nJob Cards:\n` + jobCards.map(j => `• ${j.name}: ${j.operation || ''} (${j.status})`).join('\n') : ''}\n\n👉 Click to open in ERPNext\n👉 Drag to reschedule`}
+                                    >
+                                      {/* Primary Row: Item Code & Quantity */}
+                                      <div className="prod-card-main" style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '3px' }}>
+                                        <span className="prod-item-code">{itemCode}</span>
+                                        {qty !== undefined && qty !== null && qty !== '' && (
+                                          <span className="prod-qty-badge"> : {qty}</span>
+                                        )}
                                       </div>
-                                    );
+
+                                      {/* Work Order Header Details */}
+                                      <div className="prod-card-sub" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                        {isJobCard ? (
+                                          <>
+                                            {ext.workOrder && <span className="prod-parent-wo-tag" style={{ fontSize: '11px', color: '#475569' }}>WO: {ext.workOrder}</span>}
+                                            <span className="prod-doc-id-badge badge-jc" style={{ alignSelf: 'flex-start' }}>JC: {ext.docName}</span>
+                                            {ext.operation && <span className="prod-op-tag" style={{ alignSelf: 'flex-start', marginTop: '2px' }}>{ext.operation}</span>}
+                                          </>
+                                        ) : (
+                                          <>
+                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
+                                              <span className="prod-doc-id-badge badge-wo" style={{ alignSelf: 'flex-start' }}>WO: {ext.docName}</span>
+                                              <span className="prod-status-tag-sm" style={{ fontSize: '9px', color: '#64748b', fontWeight: '700' }}>{ext.status}</span>
+                                            </div>
+
+                                            {/* Dropdown list view of all Job Cards inside this single Work Order box */}
+                                            {jobCards.length > 0 ? (
+                                              <details className="prod-card-jc-dropdown" onClick={(e) => e.stopPropagation()}>
+                                                <summary className="prod-card-jc-summary">
+                                                  <span className="jc-summary-label">📋 Job Cards ({jobCards.length})</span>
+                                                  <span className="jc-summary-caret">▾</span>
+                                                </summary>
+                                                <div className="prod-card-jc-dropdown-menu">
+                                                  {jobCards.map(jc => (
+                                                    <div
+                                                      key={jc.name}
+                                                      className="prod-card-jc-dropdown-item"
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        openDoc('jobcard', jc.name);
+                                                      }}
+                                                      title={`Click to open Job Card ${jc.name} in ERPNext\nOperation: ${jc.operation || 'N/A'}\nWorkstation: ${jc.workstation || 'N/A'}\nStatus: ${jc.status || 'N/A'}`}
+                                                    >
+                                                      <span className="jc-item-status-dot" style={{ backgroundColor: getStatusColor(jc.status) }}></span>
+                                                      <div className="jc-item-info">
+                                                        <div className="jc-item-name-row">
+                                                          <span className="jc-item-name">{jc.name}</span>
+                                                          {jc.status && <span className="jc-item-status-pill">{jc.status}</span>}
+                                                        </div>
+                                                        {jc.operation && (
+                                                          <span className="jc-item-op">
+                                                            {jc.operation} {jc.workstation ? `· ${jc.workstation}` : ''}
+                                                          </span>
+                                                        )}
+                                                      </div>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              </details>
+                                            ) : rawOps.length > 0 ? (
+                                              <details className="prod-card-jc-dropdown" onClick={(e) => e.stopPropagation()}>
+                                                <summary className="prod-card-jc-summary">
+                                                  <span className="jc-summary-label">⚙️ Ops ({rawOps.length}) · Draft</span>
+                                                  <span className="jc-summary-caret">▾</span>
+                                                </summary>
+                                                <div className="prod-card-jc-dropdown-menu">
+                                                  {rawOps.map((op, idx) => (
+                                                    <div key={idx} className="prod-card-jc-dropdown-item op-preview">
+                                                      <span className="jc-item-status-dot" style={{ backgroundColor: '#94a3b8' }}></span>
+                                                      <div className="jc-item-info">
+                                                        <div className="jc-item-name-row">
+                                                          <span className="jc-item-name">{op.operation}</span>
+                                                          {op.time_in_mins ? <span className="jc-item-status-pill">{op.time_in_mins}m</span> : null}
+                                                        </div>
+                                                        {op.workstation && <span className="jc-item-op">{op.workstation}</span>}
+                                                      </div>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              </details>
+                                            ) : (
+                                              ext.operation && (
+                                                <span className="prod-op-tag" style={{ alignSelf: 'flex-start', marginTop: '2px' }}>{ext.operation}</span>
+                                              )
+                                            )}
+                                          </>
+                                        )}
+                                      </div>
+
+                                      {/* Status dot */}
+                                      <span
+                                        className="prod-status-dot"
+                                        style={{ backgroundColor: ev.backgroundColor }}
+                                      />
+                                    </div>
+                                  );
                                 })}
                               </div>
                             </td>
