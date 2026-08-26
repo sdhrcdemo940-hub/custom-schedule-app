@@ -912,13 +912,15 @@ const Scheduler = () => {
           <div className="matrix-viewport" ref={matrixScrollRef}>
             <div className="matrix-table-container">
               <table className="matrix-table">
-                {/* Two-tier Table Header */}
                 <thead>
                   {/* Top Tier: Title and Week Numbers */}
                   <tr className="header-row-weeks">
                     <th className="th-station-sticky">
                       <div className="station-header-box">
-                        <span className="station-th-title">MACHINE / STATION</span>
+                        <div className="station-th-title-group">
+                          <span className="station-th-icon">🏭</span>
+                          <span className="station-th-title">WORKSTATION / LINE</span>
+                        </div>
                         <span className="station-count-badge">{workstationList.length} Stations</span>
                       </div>
                     </th>
@@ -929,7 +931,7 @@ const Scheduler = () => {
                         className="th-week-group"
                       >
                         <div className="week-label-wrapper">
-                          <span className="week-label-text">{group.label}</span>
+                          <span className="week-label-text">🗓️ {group.label}</span>
                         </div>
                       </th>
                     ))}
@@ -938,7 +940,7 @@ const Scheduler = () => {
                   {/* Bottom Tier: Individual Days of Month */}
                   <tr className="header-row-days">
                     <th className="th-station-sticky-sub">
-                      <div className="station-sub-label">Station Name</div>
+                      <div className="station-sub-label">Station Name / Machine</div>
                     </th>
                     {monthDays.map(day => {
                       const dayOfWeek = day.getDay(); // 0 is Sunday, 6 is Saturday
@@ -956,8 +958,12 @@ const Scheduler = () => {
                           className={`th-day-cell ${isSunday ? 'col-sunday' : ''} ${isSaturday ? 'col-saturday' : ''} ${isToday ? 'col-today' : ''}`}
                         >
                           <div className="day-header-content">
-                            <span className="day-date-str">{dayNum}-{monthShort}</span>
-                            <span className="day-weekday-str">{isSunday ? '###' : weekdayShort}</span>
+                            <span className="day-date-str">
+                              <span className="day-num-bold">{dayNum}</span> {monthShort}
+                            </span>
+                            <span className={`day-weekday-str ${isSunday ? 'weekday-sun' : ''} ${isToday ? 'weekday-today' : ''}`}>
+                              {isSunday ? 'SUN' : weekdayShort}
+                            </span>
                           </div>
                         </th>
                       );
@@ -983,22 +989,24 @@ const Scheduler = () => {
 
                     const isDraggingThisStation = draggedEvent && draggedEvent.extendedProps?.type === 'jobcard' && (draggedEvent.extendedProps?.workstation || '').trim() === stationName.trim();
                     const isDraggingOtherStation = draggedEvent && draggedEvent.extendedProps?.type === 'jobcard' && (draggedEvent.extendedProps?.workstation || '').trim() !== stationName.trim();
+                    const isUnassigned = stationName === 'Unassigned';
 
                     return (
-                      <tr key={stationName} className={`matrix-row ${isDraggingThisStation ? 'row-active-drag' : ''} ${isDraggingOtherStation ? 'row-inactive-drag' : ''}`}>
+                      <tr key={stationName} className={`matrix-row ${isDraggingThisStation ? 'row-active-drag' : ''} ${isDraggingOtherStation ? 'row-inactive-drag' : ''} ${isUnassigned ? 'row-unassigned' : ''}`}>
                         {/* Left Fixed Station Header */}
                         <td
-                          className={`td-station-sticky ${stationName !== 'Unassigned' ? 'clickable-station' : ''}`}
-                          onClick={() => stationName !== 'Unassigned' && openDoc('workstation', stationName)}
-                          title={stationName !== 'Unassigned' ? `Click to open Workstation "${stationName}" in ERPNext` : stationName}
+                          className={`td-station-sticky ${!isUnassigned ? 'clickable-station' : 'unassigned-station'}`}
+                          onClick={() => !isUnassigned && openDoc('workstation', stationName)}
+                          title={!isUnassigned ? `Click to open Workstation "${stationName}" in ERPNext` : 'Unassigned Work Orders'}
                         >
                           <div className="station-cell-content">
                             <div className="station-name-text">
-                              {stationName}
-                              {stationName !== 'Unassigned' && <span className="external-link-icon" title="Open in ERPNext"> ↗</span>}
+                              <span className="station-row-icon">{isUnassigned ? '📦' : '⚙️'}</span>
+                              <span className="station-row-title">{stationName}</span>
+                              {!isUnassigned && <span className="external-link-icon" title="Open in ERPNext">↗</span>}
                             </div>
                             {stationMonthEvents.length > 0 && (
-                              <span className="station-event-count" title={`${stationMonthEvents.length} scheduled jobs this month`}>
+                              <span className="station-event-count" title={`${stationMonthEvents.length} scheduled order(s) this month`}>
                                 {stationMonthEvents.length}
                               </span>
                             )}
