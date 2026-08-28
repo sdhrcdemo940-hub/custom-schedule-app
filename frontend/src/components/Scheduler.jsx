@@ -67,12 +67,14 @@ const Scheduler = () => {
     bom_no: '',
     qty: '',
     planned_start_date: '',
+    planned_start_time: '08:00',
     planned_end_date: '',
+    planned_end_time: '17:00',
     description: ''
   });
 
-  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3500/api';
-
+  const API_URL = process.env.REACT_APP_API_URL;
+  //const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3500/api';
   useEffect(() => {
     try {
       localStorage.setItem('scheduler_active_tab', activeTab);
@@ -126,7 +128,9 @@ const Scheduler = () => {
       bom_no: '',
       qty: '',
       planned_start_date: dateStr,
+      planned_start_time: '08:00',
       planned_end_date: dateStr,
+      planned_end_time: '17:00',
       description: ''
     });
     setWoBoms([]);
@@ -172,7 +176,17 @@ const Scheduler = () => {
     }
     setWoSubmitting(true);
     try {
-      const payload = { ...woForm };
+      const startTime = woForm.planned_start_time || '08:00';
+      const endTime = woForm.planned_end_time || '17:00';
+      const startDateTime = `${woForm.planned_start_date} ${startTime.length === 5 ? startTime + ':00' : startTime}`;
+      const endDate = woForm.planned_end_date || woForm.planned_start_date;
+      const endDateTime = `${endDate} ${endTime.length === 5 ? endTime + ':00' : endTime}`;
+
+      const payload = {
+        ...woForm,
+        planned_start_date: startDateTime,
+        planned_end_date: endDateTime
+      };
       if (createWOModal.workstation && createWOModal.workstation !== 'Unassigned') {
         payload.workstation = createWOModal.workstation;
       }
@@ -200,6 +214,22 @@ const Scheduler = () => {
     const normalized = String(value).replace(' ', 'T');
     const d = new Date(normalized);
     return isNaN(d.getTime()) ? null : d;
+  };
+
+  const formatTimeRange = (start, end) => {
+    if (!start) return '';
+    const s = start instanceof Date ? start : new Date(start);
+    if (isNaN(s.getTime())) return '';
+    const pad = n => String(n).padStart(2, '0');
+    const sTime = `${pad(s.getHours())}:${pad(s.getMinutes())}`;
+    if (end) {
+      const e = end instanceof Date ? end : new Date(end);
+      if (!isNaN(e.getTime())) {
+        const eTime = `${pad(e.getHours())}:${pad(e.getMinutes())}`;
+        return `${sTime} – ${eTime}`;
+      }
+    }
+    return sTime;
   };
 
   const fetchSchedule = async () => {
@@ -241,7 +271,7 @@ const Scheduler = () => {
           title: title,
           start: startTime,
           end: endTime,
-          allDay: true,
+          allDay: false,
           backgroundColor: getStatusColorWO(wo.status),
           borderColor: '#334155',
           extendedProps: {
@@ -254,6 +284,7 @@ const Scheduler = () => {
             workOrder: wo.name,
             workstation: station,
             jobCards: linkedJobCards,
+            timeRange: formatTimeRange(startTime, endTime),
             raw: wo
           }
         };
@@ -290,6 +321,7 @@ const Scheduler = () => {
             workOrder: woName,
             workstation: station,
             jobCards: [],
+            timeRange: formatTimeRange(startTime, endTime),
             raw: jc
           }
         };
@@ -759,7 +791,8 @@ const Scheduler = () => {
     else if (type === 'workorder') docType = 'work-order';
     else if (type === 'workstation') docType = 'workstation';
     else docType = type;
-    window.open(`http://localhost:8080/app/${docType}/${encodeURIComponent(docName)}`, '_blank');
+    //window.open(`http://localhost:8080/app/${docType}/${encodeURIComponent(docName)}`, '_blank');
+    window.open(`${process.env.REACT_APP_ERPNEXT_URL}/app/${docType}/${encodeURIComponent(docName)}`, '_blank');
   };
 
   const monthTitle = activeDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toUpperCase();
@@ -1142,7 +1175,14 @@ const Scheduler = () => {
                                         {isJobCard ? (
                                           <>
                                             {ext.workOrder && <span className="prod-parent-wo-tag" style={{ fontSize: '11px', color: '#475569' }}>WO: {ext.workOrder}</span>}
-                                            <span className="prod-doc-id-badge badge-jc" style={{ alignSelf: 'flex-start' }}>JC: {ext.docName}</span>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                                              <span className="prod-doc-id-badge badge-jc">JC: {ext.docName}</span>
+                                              {ext.timeRange && (
+                                                <span className="prod-time-range-badge" style={{ fontSize: '10px', color: '#1e3a8a', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '1px 5px', borderRadius: '4px', fontWeight: '600' }}>
+                                                  🕒 {ext.timeRange}
+                                                </span>
+                                              )}
+                                            </div>
                                             {ext.operation && <span className="prod-op-tag" style={{ alignSelf: 'flex-start', marginTop: '2px' }}>{ext.operation}</span>}
                                           </>
                                         ) : (
@@ -1151,6 +1191,12 @@ const Scheduler = () => {
                                               <span className="prod-doc-id-badge badge-wo" style={{ alignSelf: 'flex-start' }}>WO: {ext.docName}</span>
                                               <span className="prod-status-tag-sm" style={{ fontSize: '9px', color: '#64748b', fontWeight: '700' }}>{ext.status}</span>
                                             </div>
+
+                                            {ext.timeRange && (
+                                              <span className="prod-time-range-badge" style={{ fontSize: '10px', color: '#1e3a8a', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '1px 5px', borderRadius: '4px', alignSelf: 'flex-start', fontWeight: '600', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                                                🕒 {ext.timeRange}
+                                              </span>
+                                            )}
 
                                             {/* Dropdown list view of all Job Cards inside this single Work Order box */}
                                             {jobCards.length > 0 ? (
@@ -1381,9 +1427,9 @@ const Scheduler = () => {
                 />
               </div>
 
-              {/* Dates */}
+              {/* Start Schedule: Date & Time */}
               <div className="wo-form-row">
-                <div className="wo-form-group">
+                <div className="wo-form-group" style={{ flex: 3 }}>
                   <label className="wo-form-label">Planned Start Date <span className="req">*</span></label>
                   <input
                     className="wo-form-input"
@@ -1393,7 +1439,20 @@ const Scheduler = () => {
                     required
                   />
                 </div>
-                <div className="wo-form-group">
+                <div className="wo-form-group" style={{ flex: 2 }}>
+                  <label className="wo-form-label">Start Time</label>
+                  <input
+                    className="wo-form-input"
+                    type="time"
+                    value={woForm.planned_start_time}
+                    onChange={e => handleWOFormChange('planned_start_time', e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* End Schedule: Date & Time */}
+              <div className="wo-form-row">
+                <div className="wo-form-group" style={{ flex: 3 }}>
                   <label className="wo-form-label">Planned End Date</label>
                   <input
                     className="wo-form-input"
@@ -1401,6 +1460,15 @@ const Scheduler = () => {
                     value={woForm.planned_end_date}
                     min={woForm.planned_start_date}
                     onChange={e => handleWOFormChange('planned_end_date', e.target.value)}
+                  />
+                </div>
+                <div className="wo-form-group" style={{ flex: 2 }}>
+                  <label className="wo-form-label">End Time</label>
+                  <input
+                    className="wo-form-input"
+                    type="time"
+                    value={woForm.planned_end_time}
+                    onChange={e => handleWOFormChange('planned_end_time', e.target.value)}
                   />
                 </div>
               </div>

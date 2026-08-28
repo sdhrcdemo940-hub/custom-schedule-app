@@ -13,7 +13,8 @@ app.use(cors());
 app.use(express.json());
 
 // Configuration
-const ERPNEXT_URL = process.env.ERPNEXT_URL || 'http://localhost:8080';
+const ERPNEXT_URL = process.env.ERPNEXT_URL;
+//const ERPNEXT_URL = process.env.ERPNEXT_URL || 'http://localhost:8080';
 const ERPNEXT_API_KEY = process.env.ERPNEXT_API_KEY;
 const ERPNEXT_API_SECRET = process.env.ERPNEXT_API_SECRET;
 
@@ -112,9 +113,9 @@ const updateJobCardSchedule = async (jobCardId, from_time, to_time) => {
 app.put('/api/job-cards/:id/reschedule', async (req, res) => {
   try {
     const { from_time, to_time } = req.body;
-    
+
     const response = await updateJobCardSchedule(req.params.id, from_time, to_time);
-    
+
     res.json({
       success: true,
       message: `Job Card ${req.params.id} rescheduled`,
@@ -128,7 +129,7 @@ app.put('/api/job-cards/:id/reschedule', async (req, res) => {
       ? 'Reschedule failed: the linked Work Order is cancelled. Open the Job Card in ERPNext and fix or remove the cancelled Work Order link before rescheduling.'
       : error.message;
 
-    res.status(isCancelledLink ? 400 : 500).json({ 
+    res.status(isCancelledLink ? 400 : 500).json({
       success: false,
       error: message,
       details: erpData
@@ -269,12 +270,30 @@ app.post('/api/work-orders', async (req, res) => {
       console.warn(`Could not fetch BOM ${bom_no} operations:`, bomErr.message);
     }
 
+    // Helper to format into 'YYYY-MM-DD HH:mm:ss'
+    const formatERPDatetime = (dt, defaultTime = '08:00:00') => {
+      if (!dt) return null;
+      let s = String(dt).trim().replace('T', ' ');
+      if (!s.includes(' ')) {
+        s = `${s} ${defaultTime}`;
+      } else {
+        const parts = s.split(' ');
+        let timePart = parts[1];
+        if (timePart.length === 5) timePart += ':00';
+        s = `${parts[0]} ${timePart}`;
+      }
+      return s;
+    };
+
+    const formattedStart = formatERPDatetime(planned_start_date, '08:00:00');
+    const formattedEnd = formatERPDatetime(planned_end_date || planned_start_date, '17:00:00');
+
     const payload = {
       production_item,
       bom_no,
       qty: Number(qty),
-      planned_start_date,
-      planned_end_date: planned_end_date || planned_start_date,
+      planned_start_date: formattedStart,
+      planned_end_date: formattedEnd,
       company: company || 'SHRDC Demo',
       wip_warehouse: wip_warehouse || 'Work In Progress - SD',
       fg_warehouse: fg_warehouse || 'Finished Goods - SD',
@@ -299,16 +318,15 @@ app.post('/api/work-orders', async (req, res) => {
       console.log(`Saved workstation "${workstation}" for WO ${newWO.name} in memory map`);
     }
 
-    // If a workstation is specified, immediately override every operation's workstation
-    // on the Work Order's operations child table, AND any already-created Job Cards.
-    if (workstation) {
-      // Step 1: Fetch the full WO document to get its operations child table
-      try {
+    // If a workstation or times are specified, override operation workstations
+    // and sync the scheduled times to any created Job Cards.
+    try {
+      // Step 1: Update operations child table if workstation is specified
+      if (workstation && workstation !== 'Unassigned') {
         const woFull = (await erpnextAPI.get(`/Work Order/${newWO.name}`)).data.data;
         const operations = Array.isArray(woFull.operations) ? woFull.operations : [];
 
         if (operations.length > 0) {
-          // Override every operation's workstation
           const updatedOps = operations.map(op => ({
             ...op,
             workstation: workstation
@@ -316,31 +334,30 @@ app.post('/api/work-orders', async (req, res) => {
           await erpnextAPI.put(`/Work Order/${newWO.name}`, { operations: updatedOps });
           console.log(`Overrode workstation to "${workstation}" on ${operations.length} operation(s) of WO ${newWO.name}`);
         }
-      } catch (e) {
-        console.warn('Failed to override operations workstation on Work Order', newWO.name, e.message);
       }
 
-      // Step 2: Also update any Job Cards already linked (in case ERPNext created them on insert)
-      try {
-        const jcListResp = await erpnextAPI.get('/Job Card', {
-          params: {
-            fields: JSON.stringify(['name']),
-            filters: JSON.stringify([
-              ['work_order', '=', newWO.name]
-            ]),
-            limit_page_length: 500
-          }
-        });
-        const jobCardNames = (jcListResp.data.data || []).map(r => r.name);
-        if (jobCardNames.length > 0) {
-          await Promise.all(jobCardNames.map(async (jcName) => {
-            await erpnextAPI.put(`/Job Card/${jcName}`, { workstation });
-          }));
-          console.log(`Set workstation to "${workstation}" on ${jobCardNames.length} Job Card(s) for WO ${newWO.name}`);
+      // Step 2: Sync workstation & scheduled start/end times on any Job Cards created
+      const jcListResp = await erpnextAPI.get('/Job Card', {
+        params: {
+          fields: JSON.stringify(['name']),
+          filters: JSON.stringify([
+            ['work_order', '=', newWO.name]
+          ]),
+          limit_page_length: 500
         }
-      } catch (e) {
-        console.warn('Failed to set workstation on Job Cards for Work Order', newWO.name, e.message);
+      });
+      const jobCardNames = (jcListResp.data.data || []).map(r => r.name);
+      if (jobCardNames.length > 0) {
+        await Promise.all(jobCardNames.map(async (jcName) => {
+          await updateJobCardSchedule(jcName, formattedStart, formattedEnd);
+          if (workstation && workstation !== 'Unassigned') {
+            await erpnextAPI.put(`/Job Card/${jcName}`, { workstation });
+          }
+        }));
+        console.log(`Synced schedule (${formattedStart} - ${formattedEnd}) on ${jobCardNames.length} Job Card(s) for WO ${newWO.name}`);
       }
+    } catch (postSyncErr) {
+      console.warn('Post-creation sync warning for Work Order', newWO.name, postSyncErr.message);
     }
 
     res.json({
@@ -503,7 +520,7 @@ const syncRescheduleJobCard = async (jobCardId, from_time, to_time) => {
 app.put('/api/work-orders/:id/reschedule', async (req, res) => {
   try {
     const { planned_start_date, planned_end_date, sync_job_cards = true } = req.body;
-    
+
     if (sync_job_cards) {
       const result = await syncRescheduleWorkOrder(req.params.id, planned_start_date, planned_end_date || planned_start_date);
       return res.json({
@@ -517,7 +534,7 @@ app.put('/api/work-orders/:id/reschedule', async (req, res) => {
       planned_start_date: planned_start_date,
       planned_end_date: planned_end_date
     });
-    
+
     res.json({
       success: true,
       message: `Work Order ${req.params.id} rescheduled`,
@@ -525,9 +542,9 @@ app.put('/api/work-orders/:id/reschedule', async (req, res) => {
     });
   } catch (error) {
     console.error('Work Order reschedule error:', error.response ? error.response.data : error.message);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      error: error.message 
+      error: error.message
     });
   }
 });
@@ -722,7 +739,7 @@ const linearTrend = (vals) => {
   const meanX = xs.reduce((a, b) => a + b, 0) / n;
   const meanY = vals.reduce((a, b) => a + b, 0) / n;
   const slope = xs.reduce((sum, x, i) => sum + (x - meanX) * (vals[i] - meanY), 0) /
-                xs.reduce((sum, x) => sum + (x - meanX) ** 2, 0);
+    xs.reduce((sum, x) => sum + (x - meanX) ** 2, 0);
   const intercept = meanY - slope * meanX;
   return Math.max(0, slope * n + intercept); // Forecast for next period
 };
@@ -855,7 +872,8 @@ app.use((err, req, res, next) => {
 
 // ==================== START SERVER ====================
 
-const PORT = process.env.PORT || 3000;
+//const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT;
 app.listen(PORT, () => {
   console.log(`Scheduler API running on http://localhost:${PORT}`);
   console.log(`Connected to ERPNext: ${ERPNEXT_URL}`);

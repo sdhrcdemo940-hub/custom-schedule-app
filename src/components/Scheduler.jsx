@@ -13,8 +13,8 @@ const Scheduler = () => {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000/api';
-
+  const API_URL = process.env.REACT_APP_API_URL;
+  //const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000/api';
   // Fetch data from backend
   useEffect(() => {
     fetchSchedule();
@@ -25,7 +25,7 @@ const Scheduler = () => {
     try {
       const response = await fetch(`${API_URL}/schedule`);
       const data = await response.json();
-      
+
       // Transform Job Cards
       const jobCardEvents = data.jobCards.map(jc => ({
         id: `jc-${jc.name}`,
@@ -92,7 +92,7 @@ const Scheduler = () => {
           })
         });
       }
-      
+
       // Refresh data
       await fetchSchedule();
     } catch (err) {
