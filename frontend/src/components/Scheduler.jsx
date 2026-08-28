@@ -73,6 +73,9 @@ const Scheduler = () => {
     description: ''
   });
 
+  // ── Edit Time / Reschedule Modal State ──
+  const [editTimeModal, setEditTimeModal] = useState(null);
+
   const API_URL = process.env.REACT_APP_API_URL;
   //const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3500/api';
   useEffect(() => {
@@ -205,6 +208,48 @@ const Scheduler = () => {
       showToast(`✗ ${err.message}`, true);
     } finally {
       setWoSubmitting(false);
+    }
+  };
+
+  const openEditTimeModal = (ev) => {
+    const ext = ev.extendedProps || {};
+    const s = ev.start instanceof Date ? ev.start : new Date(ev.start);
+    const e = ev.end ? (ev.end instanceof Date ? ev.end : new Date(ev.end)) : s;
+    const pad = n => String(n).padStart(2, '0');
+
+    const sDate = !isNaN(s.getTime()) ? `${s.getFullYear()}-${pad(s.getMonth() + 1)}-${pad(s.getDate())}` : '';
+    const sTime = !isNaN(s.getTime()) ? `${pad(s.getHours())}:${pad(s.getMinutes())}` : '08:00';
+
+    const eDate = !isNaN(e.getTime()) ? `${e.getFullYear()}-${pad(e.getMonth() + 1)}-${pad(e.getDate())}` : sDate;
+    const eTime = !isNaN(e.getTime()) ? `${pad(e.getHours())}:${pad(e.getMinutes())}` : '17:00';
+
+    setEditTimeModal({
+      eventObj: ev,
+      docType: ext.type,
+      docName: ext.docName,
+      itemCode: ext.itemCode || ext.docName,
+      status: ext.status,
+      startDate: sDate,
+      startTime: sTime,
+      endDate: eDate,
+      endTime: eTime,
+      workstation: ext.workstation || 'Unassigned'
+    });
+  };
+
+  const handleEditTimeSubmit = async (e) => {
+    e.preventDefault();
+    if (!editTimeModal) return;
+    const { eventObj, startDate, startTime, endDate, endTime, workstation } = editTimeModal;
+
+    const startDateTime = new Date(`${startDate}T${startTime.length === 5 ? startTime + ':00' : startTime}`);
+    const endDateTime = new Date(`${endDate || startDate}T${endTime.length === 5 ? endTime + ':00' : endTime}`);
+
+    try {
+      await rescheduleEvent(eventObj, startDateTime, endDateTime, workstation);
+      setEditTimeModal(null);
+    } catch (err) {
+      // Toast handles error display
     }
   };
 
@@ -365,6 +410,14 @@ const Scheduler = () => {
     return colors[status] || '#7c3aed';
   };
 
+  // Check if a Work Order is locked from drag & drop (already started or completed)
+  const isWODragLocked = (event) => {
+    const ext = event?.extendedProps || event;
+    if (ext?.type !== 'workorder') return false;
+    const status = (ext?.status || '').trim();
+    return status === 'In Process' || status === 'Completed';
+  };
+
   const formatDateTimeLocal = (date) => {
     if (!date) return null;
     const d = date instanceof Date ? date : new Date(date);
@@ -389,8 +442,8 @@ const Scheduler = () => {
 
     setSyncing(true);
     try {
-      const formattedStart = type === 'jobcard' ? formatDateTimeLocal(newStart) : formatDateLocal(newStart);
-      const formattedEnd = type === 'jobcard' ? formatDateTimeLocal(newEnd) : formatDateLocal(newEnd);
+      const formattedStart = formatDateTimeLocal(newStart);
+      const formattedEnd = formatDateTimeLocal(newEnd);
 
       const response = await fetch(`${API_URL}/schedule/sync-reschedule`, {
         method: 'PUT',
@@ -507,6 +560,12 @@ const Scheduler = () => {
   // FullCalendar event drop handler
   const handleFullCalendarDrop = async (info) => {
     const { event } = info;
+    // Block drop for locked Work Orders
+    if (isWODragLocked({ extendedProps: event.extendedProps })) {
+      showToast(`🔒 WO "${event.extendedProps?.docName}" is ${event.extendedProps?.status} and cannot be rescheduled.`, true);
+      info.revert();
+      return;
+    }
     try {
       await rescheduleEvent(
         {
@@ -704,6 +763,12 @@ const Scheduler = () => {
 
   // Drag and Drop handlers for Matrix
   const handleDragStart = (e, ev) => {
+    // Block drag for locked Work Orders
+    if (isWODragLocked(ev)) {
+      e.preventDefault();
+      showToast(`🔒 WO "${ev.extendedProps?.docName}" is ${ev.extendedProps?.status} and cannot be rescheduled.`, true);
+      return;
+    }
     setDraggedEvent(ev);
     try {
       e.dataTransfer.setData('text/plain', JSON.stringify({ id: ev.id }));
@@ -751,6 +816,13 @@ const Scheduler = () => {
     setDragOverCell(null);
     const ev = draggedEvent;
     if (!ev) return;
+
+    // Block drop for locked Work Orders
+    if (isWODragLocked(ev)) {
+      showToast(`🔒 WO "${ev.extendedProps?.docName}" is ${ev.extendedProps?.status} and cannot be rescheduled.`, true);
+      setDraggedEvent(null);
+      return;
+    }
 
     const isJobCard = ev.extendedProps?.type === 'jobcard';
     const originalWs = (ev.extendedProps?.workstation || 'Unassigned').trim();
@@ -1151,17 +1223,23 @@ const Scheduler = () => {
                                   const jobCards = Array.isArray(ext.jobCards) ? ext.jobCards : [];
                                   const rawOps = Array.isArray(ext.raw?.operations) ? ext.raw.operations : [];
 
+                                  const dragLocked = isWODragLocked(ev);
+
                                   return (
                                     <div
                                       key={ev.id}
-                                      draggable
+                                      draggable={!dragLocked}
                                       onDragStart={(e) => handleDragStart(e, ev)}
                                       onDragEnd={handleDragEnd}
                                       onClick={() => openDoc(ext.type, ext.docName)}
-                                      className={`prod-card ${isJobCard ? 'card-jobcard' : 'card-workorder'}`}
-                                      style={{ borderLeftColor: ev.backgroundColor || '#2563eb' }}
-                                      title={`[${ext.type.toUpperCase()}] ${ext.docName}\nItem: ${itemCode}\nQty: ${qty}\nStatus: ${ext.status}\nWorkstation: ${ext.workstation || 'N/A'}${jobCards.length > 0 ? `\n\nJob Cards:\n` + jobCards.map(j => `• ${j.name}: ${j.operation || ''} (${j.status})`).join('\n') : ''}\n\n👉 Click to open in ERPNext\n👉 Drag to reschedule`}
+                                      className={`prod-card ${isJobCard ? 'card-jobcard' : 'card-workorder'}${dragLocked ? ' card-locked' : ''}`}
+                                      style={{ borderLeftColor: ev.backgroundColor || '#2563eb', cursor: dragLocked ? 'not-allowed' : undefined }}
+                                      title={dragLocked ? `🔒 [${ext.type.toUpperCase()}] ${ext.docName} — ${ext.status} (locked from rescheduling)\nItem: ${itemCode}\nQty: ${qty}\n\n👉 Click to open in ERPNext` : `[${ext.type.toUpperCase()}] ${ext.docName}\nItem: ${itemCode}\nQty: ${qty}\nStatus: ${ext.status}\nWorkstation: ${ext.workstation || 'N/A'}${jobCards.length > 0 ? `\n\nJob Cards:\n` + jobCards.map(j => `• ${j.name}: ${j.operation || ''} (${j.status})`).join('\n') : ''}\n\n👉 Click to open in ERPNext\n👉 Drag to reschedule`}
                                     >
+                                      {/* Lock indicator for started/completed WOs */}
+                                      {dragLocked && (
+                                        <span className="prod-lock-badge" title={`${ext.status} — cannot be rescheduled`}>🔒</span>
+                                      )}
                                       {/* Primary Row: Item Code & Quantity */}
                                       <div className="prod-card-main" style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '3px' }}>
                                         <span className="prod-item-code">{itemCode}</span>
@@ -1193,8 +1271,16 @@ const Scheduler = () => {
                                             </div>
 
                                             {ext.timeRange && (
-                                              <span className="prod-time-range-badge" style={{ fontSize: '10px', color: '#1e3a8a', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '1px 5px', borderRadius: '4px', alignSelf: 'flex-start', fontWeight: '600', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                                                🕒 {ext.timeRange}
+                                              <span
+                                                className="prod-time-range-badge clickable-time-badge"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  if (!dragLocked) openEditTimeModal(ev);
+                                                }}
+                                                title={dragLocked ? 'Locked from rescheduling' : 'Click to edit date & time'}
+                                                style={{ fontSize: '10px', color: '#1e3a8a', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '1px 5px', borderRadius: '4px', alignSelf: 'flex-start', fontWeight: '600', display: 'inline-flex', alignItems: 'center', gap: '3px', cursor: dragLocked ? 'not-allowed' : 'pointer' }}
+                                              >
+                                                🕒 {ext.timeRange} {!dragLocked && <span style={{ fontSize: '9px', opacity: 0.7 }}>✏️</span>}
                                               </span>
                                             )}
 
@@ -1308,6 +1394,10 @@ const Scheduler = () => {
               eventContent={renderEventContent}
               eventDrop={handleFullCalendarDrop}
               eventResize={handleFullCalendarDrop}
+              eventAllow={(dropInfo, draggedEvent) => {
+                // Prevent dragging locked Work Orders in calendar view
+                return !isWODragLocked({ extendedProps: draggedEvent.extendedProps });
+              }}
               eventDisplay="block"
               height="auto"
               dateClick={(info) => {
@@ -1492,6 +1582,99 @@ const Scheduler = () => {
                 </button>
                 <button type="submit" className="wo-btn-submit" disabled={woSubmitting}>
                   {woSubmitting ? <span className="spin">⏳</span> : '🏭'} {woSubmitting ? 'Creating...' : 'Create Work Order'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Edit Time / Reschedule Modal ── */}
+      {editTimeModal && (
+        <div className="wo-modal-overlay" onClick={(e) => { if (e.target.classList.contains('wo-modal-overlay')) setEditTimeModal(null); }}>
+          <div className="wo-modal wo-edit-time-modal">
+            <div className="wo-modal-header">
+              <div>
+                <h3 className="wo-modal-title">🕒 Edit Schedule & Time</h3>
+                <div className="wo-modal-subtitle">
+                  {editTimeModal.docType === 'workorder' ? 'Work Order' : 'Job Card'}: <strong>{editTimeModal.docName}</strong> ({editTimeModal.itemCode})
+                </div>
+              </div>
+              <button className="wo-modal-close" onClick={() => setEditTimeModal(null)} title="Close">✕</button>
+            </div>
+
+            <form onSubmit={handleEditTimeSubmit} className="wo-modal-form">
+              {/* Start Date & Time */}
+              <div className="wo-form-row">
+                <div className="wo-form-group">
+                  <label className="wo-form-label">Start Date *</label>
+                  <input
+                    type="date"
+                    className="wo-form-input"
+                    value={editTimeModal.startDate}
+                    onChange={e => setEditTimeModal(m => ({ ...m, startDate: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div className="wo-form-group">
+                  <label className="wo-form-label">Start Time *</label>
+                  <input
+                    type="time"
+                    className="wo-form-input"
+                    value={editTimeModal.startTime}
+                    onChange={e => setEditTimeModal(m => ({ ...m, startTime: e.target.value }))}
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* End Date & Time */}
+              <div className="wo-form-row">
+                <div className="wo-form-group">
+                  <label className="wo-form-label">End Date *</label>
+                  <input
+                    type="date"
+                    className="wo-form-input"
+                    value={editTimeModal.endDate}
+                    onChange={e => setEditTimeModal(m => ({ ...m, endDate: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div className="wo-form-group">
+                  <label className="wo-form-label">End Time *</label>
+                  <input
+                    type="time"
+                    className="wo-form-input"
+                    value={editTimeModal.endTime}
+                    onChange={e => setEditTimeModal(m => ({ ...m, endTime: e.target.value }))}
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Workstation */}
+              <div className="wo-form-group">
+                <label className="wo-form-label">Workstation / Line</label>
+                <select
+                  className="wo-form-select"
+                  value={editTimeModal.workstation}
+                  onChange={e => setEditTimeModal(m => ({ ...m, workstation: e.target.value }))}
+                >
+                  <option value="Unassigned">Unassigned</option>
+                  {backendWorkstations.map(ws => {
+                    const name = (ws.workstation_name || ws.name || '').trim();
+                    return name ? <option key={name} value={name}>{name}</option> : null;
+                  })}
+                </select>
+              </div>
+
+              {/* Actions */}
+              <div className="wo-modal-actions">
+                <button type="button" className="wo-btn-cancel" onClick={() => setEditTimeModal(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="wo-btn-submit">
+                  💾 Save Schedule
                 </button>
               </div>
             </form>

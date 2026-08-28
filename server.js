@@ -42,6 +42,49 @@ const normalizeJobCardTimes = (jobCard) => {
   };
 };
 
+// Helper: Parse human-readable error messages from ERPNext / Frappe response
+const parseERPNextError = (error) => {
+  if (error.response && error.response.data) {
+    const data = error.response.data;
+
+    // 1. Try parsing _server_messages (Frappe standard message array)
+    if (data._server_messages) {
+      try {
+        const parsedMsgs = typeof data._server_messages === 'string'
+          ? JSON.parse(data._server_messages)
+          : data._server_messages;
+        if (Array.isArray(parsedMsgs) && parsedMsgs.length > 0) {
+          const firstObj = typeof parsedMsgs[0] === 'string' ? JSON.parse(parsedMsgs[0]) : parsedMsgs[0];
+          if (firstObj && firstObj.message) {
+            return firstObj.message.replace(/<[^>]*>?/gm, '').trim();
+          }
+        }
+      } catch (e) {
+        // Ignore JSON parse error
+      }
+    }
+
+    // 2. Try exception message string (e.g. "frappe.exceptions.ValidationError: Cannot update Work Order...")
+    if (typeof data.exception === 'string' && data.exception) {
+      const parts = data.exception.split(':');
+      if (parts.length > 1) {
+        return parts.slice(1).join(':').trim();
+      }
+      return data.exception;
+    }
+
+    // 3. Try data.message or data.error string
+    if (typeof data.message === 'string' && data.message) {
+      return data.message;
+    }
+    if (typeof data.error === 'string' && data.error) {
+      return data.error;
+    }
+  }
+
+  return error.message || 'An unexpected error occurred';
+};
+
 // ==================== JOB CARD ENDPOINTS ====================
 
 // Get all Job Cards
@@ -127,9 +170,9 @@ app.put('/api/job-cards/:id/reschedule', async (req, res) => {
     const isCancelledLink = erpData && erpData.exception && erpData.exception.includes('CancelledLinkError');
     const message = isCancelledLink
       ? 'Reschedule failed: the linked Work Order is cancelled. Open the Job Card in ERPNext and fix or remove the cancelled Work Order link before rescheduling.'
-      : error.message;
+      : parseERPNextError(error);
 
-    res.status(isCancelledLink ? 400 : 500).json({
+    res.status(error.response?.status || 500).json({
       success: false,
       error: message,
       details: erpData
@@ -542,9 +585,10 @@ app.put('/api/work-orders/:id/reschedule', async (req, res) => {
     });
   } catch (error) {
     console.error('Work Order reschedule error:', error.response ? error.response.data : error.message);
-    res.status(500).json({
+    const userMessage = parseERPNextError(error);
+    res.status(error.response?.status || 500).json({
       success: false,
-      error: error.message
+      error: userMessage
     });
   }
 });
@@ -577,9 +621,10 @@ app.put('/api/schedule/sync-reschedule', async (req, res) => {
     }
   } catch (error) {
     console.error('Sync reschedule error:', error.response ? error.response.data : error.message);
-    res.status(500).json({
+    const userMessage = parseERPNextError(error);
+    res.status(error.response?.status || 500).json({
       success: false,
-      error: error.message,
+      error: userMessage,
       details: error.response ? error.response.data : null
     });
   }
