@@ -73,8 +73,30 @@ const Scheduler = () => {
     description: ''
   });
 
+  // ── Batch Mode State ──
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchCount, setBatchCount] = useState(2);
+
+  // ── Batch Group Tracking State ──
+  const [batchGroups, setBatchGroups] = useState([]);
+  const [showBatchPanel, setShowBatchPanel] = useState(false);
+  const [batchPanelLoading, setBatchPanelLoading] = useState(false);
+  const [expandedBatchGroup, setExpandedBatchGroup] = useState(null);
+
   // ── Edit Time / Reschedule Modal State ──
   const [editTimeModal, setEditTimeModal] = useState(null);
+
+  // ── Work Order Live Timer Execution State ──
+  const [woTimers, setWoTimers] = useState({});
+  const [timerTick, setTimerTick] = useState(0);
+
+  // Tick interval for live updating stopwatch timers every second
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTimerTick(t => (t + 1) % 1000000);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const API_URL = process.env.REACT_APP_API_URL;
   //const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3500/api';
@@ -137,6 +159,8 @@ const Scheduler = () => {
       description: ''
     });
     setWoBoms([]);
+    setBatchMode(false);
+    setBatchCount(2);
     setCreateWOModal({ date, workstation });
     // Fetch items if not already loaded
     if (woItems.length === 0) {
@@ -185,23 +209,52 @@ const Scheduler = () => {
       const endDate = woForm.planned_end_date || woForm.planned_start_date;
       const endDateTime = `${endDate} ${endTime.length === 5 ? endTime + ':00' : endTime}`;
 
-      const payload = {
-        ...woForm,
-        planned_start_date: startDateTime,
-        planned_end_date: endDateTime
-      };
-      if (createWOModal.workstation && createWOModal.workstation !== 'Unassigned') {
-        payload.workstation = createWOModal.workstation;
+      if (batchMode && batchCount > 1) {
+        // Batch creation mode
+        const payload = {
+          production_item: woForm.production_item,
+          bom_no: woForm.bom_no,
+          qty: woForm.qty,
+          batch_count: batchCount,
+          planned_start_date: woForm.planned_start_date,
+          planned_end_date: woForm.planned_end_date || woForm.planned_start_date,
+          planned_start_time: startTime,
+          planned_end_time: endTime,
+          description: woForm.description
+        };
+        if (createWOModal.workstation && createWOModal.workstation !== 'Unassigned') {
+          payload.workstation = createWOModal.workstation;
+        }
+
+        const resp = await fetch(`${API_URL}/batch-work-orders`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const result = await resp.json();
+        if (!resp.ok || !result.success) throw new Error(result.error || 'Failed to create batch Work Orders');
+        showToast(`✓ ${result.message}`);
+      } else {
+        // Single WO creation (existing logic)
+        const payload = {
+          ...woForm,
+          planned_start_date: startDateTime,
+          planned_end_date: endDateTime
+        };
+        if (createWOModal.workstation && createWOModal.workstation !== 'Unassigned') {
+          payload.workstation = createWOModal.workstation;
+        }
+
+        const resp = await fetch(`${API_URL}/work-orders`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const result = await resp.json();
+        if (!resp.ok || !result.success) throw new Error(result.error || 'Failed to create Work Order');
+        showToast(`✓ ${result.message}`);
       }
 
-      const resp = await fetch(`${API_URL}/work-orders`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const result = await resp.json();
-      if (!resp.ok || !result.success) throw new Error(result.error || 'Failed to create Work Order');
-      showToast(`✓ ${result.message}`);
       setCreateWOModal(null);
       await fetchSchedule();
     } catch (err) {
@@ -311,6 +364,9 @@ const Scheduler = () => {
         const opSummary = opCount > 0 ? `${opCount} ops` : '';
         const title = `${itemCode}${qty ? ` (${qty} kg)` : ''} | WO: ${wo.name}${linkedJobCards.length > 0 ? ` (${linkedJobCards.length} JCs)` : ''}`;
 
+        // Batch group metadata (from enriched backend data)
+        const batchGroup = wo._batchGroup || null;
+
         return {
           id: `wo-${wo.name}`,
           title: title,
@@ -330,6 +386,7 @@ const Scheduler = () => {
             workstation: station,
             jobCards: linkedJobCards,
             timeRange: formatTimeRange(startTime, endTime),
+            batchGroup: batchGroup,
             raw: wo
           }
         };
@@ -373,12 +430,100 @@ const Scheduler = () => {
       });
 
       setEvents([...workOrderEvents, ...jobCardEvents]);
+
+      // Capture batch groups from schedule response
+      if (Array.isArray(data.batchGroups)) {
+        setBatchGroups(data.batchGroups);
+      }
+
+      // Capture active timers from schedule response
+      if (data.timers) {
+        setWoTimers(data.timers);
+      }
+
       setError(null);
     } catch (err) {
       setError(err.message);
       console.error('Error fetching schedule:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // ── Work Order Live Timer Action Handlers ──
+  const getWOTimerSeconds = (woName) => {
+    const t = woTimers[woName];
+    if (!t) return 0;
+    if (t.status === 'running' && t.lastIntervalStart) {
+      const added = Math.max(0, Math.floor((Date.now() - t.lastIntervalStart) / 1000));
+      return (t.elapsedSeconds || 0) + added;
+    }
+    return t.elapsedSeconds || 0;
+  };
+
+  const formatTimerDuration = (totalSeconds) => {
+    const s = Math.max(0, Number(totalSeconds) || 0);
+    const pad = n => String(n).padStart(2, '0');
+    const hours = Math.floor(s / 3600);
+    const mins = Math.floor((s % 3600) / 60);
+    const secs = s % 60;
+    if (hours > 0) return `${pad(hours)}:${pad(mins)}:${pad(secs)}`;
+    return `${pad(mins)}:${pad(secs)}`;
+  };
+
+  const handleStartTimer = async (woName, e) => {
+    if (e) e.stopPropagation();
+    try {
+      const resp = await fetch(`${API_URL}/work-orders/${encodeURIComponent(woName)}/start`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to start timer');
+      setWoTimers(prev => ({ ...prev, [woName]: data.timer }));
+      const steNote = data.transferStockEntry ? ` [Transfer: ${data.transferStockEntry}]` : '';
+      showToast(`▶ Started ${woName}${steNote} — Raw materials transferred to WIP`);
+      await fetchSchedule();
+    } catch (err) {
+      showToast(`✗ Failed to start: ${err.message}`, true);
+    }
+  };
+
+  const handlePauseTimer = async (woName, e) => {
+    if (e) e.stopPropagation();
+    try {
+      const resp = await fetch(`${API_URL}/work-orders/${encodeURIComponent(woName)}/pause`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to pause timer');
+      setWoTimers(prev => ({ ...prev, [woName]: data.timer }));
+      showToast(`⏸ Paused ${woName} (${formatTimerDuration(data.timer?.elapsedSeconds)})`);
+    } catch (err) {
+      showToast(`✗ Failed to pause: ${err.message}`, true);
+    }
+  };
+
+  const handleResumeTimer = async (woName, e) => {
+    if (e) e.stopPropagation();
+    try {
+      const resp = await fetch(`${API_URL}/work-orders/${encodeURIComponent(woName)}/resume`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to resume timer');
+      setWoTimers(prev => ({ ...prev, [woName]: data.timer }));
+      showToast(`▶ Resumed ${woName}`);
+    } catch (err) {
+      showToast(`✗ Failed to resume: ${err.message}`, true);
+    }
+  };
+
+  const handleFinishTimer = async (woName, e) => {
+    if (e) e.stopPropagation();
+    try {
+      const resp = await fetch(`${API_URL}/work-orders/${encodeURIComponent(woName)}/finish`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to finish timer');
+      setWoTimers(prev => ({ ...prev, [woName]: data.timer }));
+      const steNote = data.manufactureStockEntry ? ` [Manufacture: ${data.manufactureStockEntry}]` : '';
+      showToast(`✓ Completed ${woName}${steNote} — Finished goods manufactured! (Total: ${formatTimerDuration(data.timer?.elapsedSeconds)})`);
+      await fetchSchedule();
+    } catch (err) {
+      showToast(`✗ Failed to finish: ${err.message}`, true);
     }
   };
 
@@ -432,13 +577,73 @@ const Scheduler = () => {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   };
 
-  // Synchronized Reschedule API caller (coordinates Work Orders and child Job Cards together)
+  // Helper: Apply optimistic state updates locally to React state for instant 0ms visual feedback
+  const applyOptimisticReschedule = (currentEvents, eventObj, newStart, newEnd, newWorkstation) => {
+    const type = eventObj.extendedProps?.type;
+    const docName = eventObj.extendedProps?.docName;
+    const targetWs = (newWorkstation || eventObj.extendedProps?.workstation || 'Unassigned').trim();
+
+    return currentEvents.map(ev => {
+      const ext = ev.extendedProps || {};
+      const isTarget = ext.type === type && ext.docName === docName;
+
+      if (isTarget) {
+        return {
+          ...ev,
+          start: newStart,
+          end: newEnd,
+          extendedProps: {
+            ...ext,
+            workstation: targetWs,
+            timeRange: formatTimeRange(newStart, newEnd)
+          }
+        };
+      }
+
+      // If updating a Work Order, also update linked Job Cards in the same Work Order
+      if (type === 'workorder' && ext.type === 'jobcard' && ext.workOrder === docName) {
+        const origWOStart = eventObj.start instanceof Date ? eventObj.start : new Date(eventObj.start);
+        const origJCStart = ev.start instanceof Date ? ev.start : new Date(ev.start);
+        const origJCEnd = ev.end instanceof Date ? ev.end : new Date(ev.end);
+        const duration = Math.max(0, origJCEnd.getTime() - origJCStart.getTime());
+
+        const offsetMs = !isNaN(origWOStart.getTime()) && !isNaN(origJCStart.getTime())
+          ? origJCStart.getTime() - origWOStart.getTime()
+          : 0;
+
+        const updatedJCStart = new Date(newStart.getTime() + offsetMs);
+        const updatedJCEnd = new Date(updatedJCStart.getTime() + duration);
+
+        return {
+          ...ev,
+          start: updatedJCStart,
+          end: updatedJCEnd,
+          extendedProps: {
+            ...ext,
+            workstation: targetWs !== 'Unassigned' ? targetWs : ext.workstation,
+            timeRange: formatTimeRange(updatedJCStart, updatedJCEnd)
+          }
+        };
+      }
+
+      return ev;
+    });
+  };
+
+  // Synchronized Reschedule API caller (coordinates Work Orders and child Job Cards together with Optimistic UI)
   const rescheduleEvent = async (eventObj, newStart, newEnd, newWorkstation) => {
     const type = eventObj.extendedProps?.type;
     const docName = eventObj.extendedProps?.docName;
     const itemCode = eventObj.extendedProps?.itemCode || 'Product';
     const workOrder = eventObj.extendedProps?.workOrder;
     if (!type || !docName) throw new Error('Invalid event data');
+
+    // Store previous events state for rollback if backend request fails
+    const previousEvents = events;
+
+    // 1. Optimistic Update (Immediate 0ms visual feedback on UI!)
+    const optimisticEvents = applyOptimisticReschedule(previousEvents, eventObj, newStart, newEnd, newWorkstation);
+    setEvents(optimisticEvents);
 
     setSyncing(true);
     try {
@@ -473,10 +678,10 @@ const Scheduler = () => {
         const hasParentWO = resData.data?.parentWorkOrder;
         showToast(`✓ Product '${itemCode}' [JC: ${docName}]${hasParentWO ? ` & parent WO: ${hasParentWO.name}` : ''} rescheduled to ${newDateStr}`);
       }
-
-      await fetchSchedule();
     } catch (err) {
       console.error('Reschedule error:', err);
+      // Revert card position back to original location on failure
+      setEvents(previousEvents);
       showToast(`✗ Reschedule failed: ${err.message}`, true);
     } finally {
       setSyncing(false);
@@ -778,6 +983,79 @@ const Scheduler = () => {
     }
   };
 
+  // Batch Group Drag Handler
+  const handleBatchGroupDragStart = (e, groupId, eventsInGroup) => {
+    const lockedWO = eventsInGroup.find(ev => isWODragLocked(ev));
+    if (lockedWO) {
+      e.preventDefault();
+      showToast(`🔒 Batch Group "${groupId}" has locked Work Orders (${lockedWO.extendedProps?.docName}) and cannot be rescheduled.`, true);
+      return;
+    }
+
+    setDraggedEvent({
+      isBatchGroup: true,
+      groupId: groupId,
+      events: eventsInGroup
+    });
+    try {
+      e.dataTransfer.setData('text/plain', JSON.stringify({ isBatchGroup: true, groupId }));
+      e.dataTransfer.effectAllowed = 'move';
+    } catch (err) {
+      // ignore
+    }
+  };
+
+  const rescheduleBatchGroup = async (groupId, eventsInGroup, targetDate, targetWorkstation) => {
+    const pad = n => String(n).padStart(2, '0');
+    const dateStr = `${targetDate.getFullYear()}-${pad(targetDate.getMonth() + 1)}-${pad(targetDate.getDate())}`;
+    const previousEvents = events;
+
+    const targetWs = (targetWorkstation || 'Unassigned').trim();
+    const optimistic = events.map(ev => {
+      if (ev.extendedProps?.batchGroup?.batchGroupId === groupId) {
+        const newStart = new Date(targetDate);
+        newStart.setHours(8, 0, 0);
+        const newEnd = new Date(targetDate);
+        newEnd.setHours(17, 0, 0);
+        return {
+          ...ev,
+          start: newStart,
+          end: newEnd,
+          extendedProps: {
+            ...ev.extendedProps,
+            workstation: targetWs
+          }
+        };
+      }
+      return ev;
+    });
+
+    setEvents(optimistic);
+    setSyncing(true);
+
+    try {
+      const resp = await fetch(`${API_URL}/batch-work-orders/${groupId}/reschedule`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          planned_start_date: dateStr,
+          workstation: targetWs
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to reschedule batch group');
+
+      showToast(`✓ Batch Group ${groupId} (${data.data?.updatedWOs?.length || eventsInGroup.length} Sub-Work-Orders) rescheduled to ${dateStr}`);
+      await fetchSchedule();
+    } catch (err) {
+      console.error('Batch group reschedule error:', err);
+      setEvents(previousEvents);
+      showToast(`✗ Reschedule failed: ${err.message}`, true);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const handleDragEnd = () => {
     setDraggedEvent(null);
     setDragOverCell(null);
@@ -787,16 +1065,18 @@ const Scheduler = () => {
     e.preventDefault();
     if (!draggedEvent) return;
 
-    const isJobCard = draggedEvent.extendedProps?.type === 'jobcard';
-    const originalWs = (draggedEvent.extendedProps?.workstation || 'Unassigned').trim();
+    if (!draggedEvent.isBatchGroup) {
+      const isJobCard = draggedEvent.extendedProps?.type === 'jobcard';
+      const originalWs = (draggedEvent.extendedProps?.workstation || 'Unassigned').trim();
 
-    // If it is a Job Card, do NOT allow drag over other workstation rows
-    if (isJobCard && originalWs !== cellStationName.trim()) {
-      e.dataTransfer.dropEffect = 'none';
-      if (dragOverCell === cellKey) {
-        setDragOverCell(null);
+      // If it is a Job Card, do NOT allow drag over other workstation rows
+      if (isJobCard && originalWs !== cellStationName.trim()) {
+        e.dataTransfer.dropEffect = 'none';
+        if (dragOverCell === cellKey) {
+          setDragOverCell(null);
+        }
+        return;
       }
-      return;
     }
 
     e.dataTransfer.dropEffect = 'move';
@@ -816,6 +1096,12 @@ const Scheduler = () => {
     setDragOverCell(null);
     const ev = draggedEvent;
     if (!ev) return;
+
+    if (ev.isBatchGroup) {
+      await rescheduleBatchGroup(ev.groupId, ev.events, targetDate, targetWorkstation);
+      setDraggedEvent(null);
+      return;
+    }
 
     // Block drop for locked Work Orders
     if (isWODragLocked(ev)) {
@@ -865,6 +1151,35 @@ const Scheduler = () => {
     else docType = type;
     //window.open(`http://localhost:8080/app/${docType}/${encodeURIComponent(docName)}`, '_blank');
     window.open(`${process.env.REACT_APP_ERPNEXT_URL}/app/${docType}/${encodeURIComponent(docName)}`, '_blank');
+  };
+
+  // Fetch live batch group details for the tracking panel
+  const fetchBatchGroupDetails = async () => {
+    setBatchPanelLoading(true);
+    try {
+      const resp = await fetch(`${API_URL}/batch-work-orders`);
+      const data = await resp.json();
+      if (data.success && Array.isArray(data.groups)) {
+        setBatchGroups(data.groups);
+      }
+    } catch (e) {
+      console.error('Failed to load batch groups:', e);
+    } finally {
+      setBatchPanelLoading(false);
+    }
+  };
+
+  // Batch group color generator (consistent color per group ID)
+  const getBatchGroupColor = (groupId) => {
+    const colors = [
+      '#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6',
+      '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#06b6d4'
+    ];
+    let hash = 0;
+    for (let i = 0; i < groupId.length; i++) {
+      hash = groupId.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return colors[Math.abs(hash) % colors.length];
   };
 
   const monthTitle = activeDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toUpperCase();
@@ -919,6 +1234,22 @@ const Scheduler = () => {
         </div>
 
         <div className="header-right">
+          <button
+            onClick={() => {
+              setShowBatchPanel(v => !v);
+              if (!showBatchPanel) fetchBatchGroupDetails();
+            }}
+            className={`btn-action btn-batch-panel ${showBatchPanel ? 'active' : ''}`}
+            title="Toggle Batch Work Order Tracking Panel"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="3" y1="9" x2="21" y2="9"></line>
+              <line x1="3" y1="15" x2="21" y2="15"></line>
+              <line x1="9" y1="3" x2="9" y2="21"></line>
+            </svg>
+            <span>Batch Groups{batchGroups.length > 0 ? ` (${batchGroups.length})` : ''}</span>
+          </button>
           <button onClick={fetchSchedule} className="btn-action btn-refresh" disabled={loading || syncing} title="Refresh data from ERPNext">
             <svg className={`btn-icon-svg ${loading || syncing ? 'spin' : ''}`} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="23 4 23 10 17 10"></polyline>
@@ -1209,161 +1540,380 @@ const Scheduler = () => {
                               onDrop={(e) => handleCellDrop(e, day, stationName)}
                               onClick={(e) => {
                                 // Only open modal if the click was on the empty cell (not on a card)
-                                if (e.target.closest('.prod-card')) return;
+                                if (e.target.closest('.prod-card') || e.target.closest('.matrix-batch-card')) return;
                                 openCreateWOModal(day, stationName);
                               }}
                               title={`Click to create a Work Order on ${day.toLocaleDateString()}`}
                             >
                               <div className="cell-events-container">
-                                {cellEvents.map(ev => {
-                                  const ext = ev.extendedProps || {};
-                                  const itemCode = ext.itemCode || ext.raw?.production_item || ext.docName;
-                                  const qty = ext.qty || ext.raw?.for_quantity || ext.raw?.qty;
-                                  const isJobCard = ext.type === 'jobcard';
-                                  const jobCards = Array.isArray(ext.jobCards) ? ext.jobCards : [];
-                                  const rawOps = Array.isArray(ext.raw?.operations) ? ext.raw.operations : [];
+                                {/* Group events in cell: Batch Groups vs Standalone */}
+                                {(() => {
+                                  const batchGroupsInCell = {};
+                                  const standaloneEvents = [];
 
-                                  const dragLocked = isWODragLocked(ev);
+                                  cellEvents.forEach(ev => {
+                                    const bGroup = ev.extendedProps?.batchGroup;
+                                    if (bGroup?.batchGroupId) {
+                                      const gid = bGroup.batchGroupId;
+                                      if (!batchGroupsInCell[gid]) batchGroupsInCell[gid] = [];
+                                      batchGroupsInCell[gid].push(ev);
+                                    } else {
+                                      standaloneEvents.push(ev);
+                                    }
+                                  });
 
                                   return (
-                                    <div
-                                      key={ev.id}
-                                      draggable={!dragLocked}
-                                      onDragStart={(e) => handleDragStart(e, ev)}
-                                      onDragEnd={handleDragEnd}
-                                      onClick={() => openDoc(ext.type, ext.docName)}
-                                      className={`prod-card ${isJobCard ? 'card-jobcard' : 'card-workorder'}${dragLocked ? ' card-locked' : ''}`}
-                                      style={{ borderLeftColor: ev.backgroundColor || '#2563eb', cursor: dragLocked ? 'not-allowed' : undefined }}
-                                      title={dragLocked ? `🔒 [${ext.type.toUpperCase()}] ${ext.docName} — ${ext.status} (locked from rescheduling)\nItem: ${itemCode}\nQty: ${qty}\n\n👉 Click to open in ERPNext` : `[${ext.type.toUpperCase()}] ${ext.docName}\nItem: ${itemCode}\nQty: ${qty}\nStatus: ${ext.status}\nWorkstation: ${ext.workstation || 'N/A'}${jobCards.length > 0 ? `\n\nJob Cards:\n` + jobCards.map(j => `• ${j.name}: ${j.operation || ''} (${j.status})`).join('\n') : ''}\n\n👉 Click to open in ERPNext\n👉 Drag to reschedule`}
-                                    >
-                                      {/* Lock indicator for started/completed WOs */}
-                                      {dragLocked && (
-                                        <span className="prod-lock-badge" title={`${ext.status} — cannot be rescheduled`}>🔒</span>
-                                      )}
-                                      {/* Primary Row: Item Code & Quantity */}
-                                      <div className="prod-card-main" style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '3px' }}>
-                                        <span className="prod-item-code">{itemCode}</span>
-                                        {qty !== undefined && qty !== null && qty !== '' && (
-                                          <span className="prod-qty-badge"> : {qty}</span>
-                                        )}
-                                      </div>
+                                    <>
+                                      {/* 1. Render Batch Group Cards in Workstation Matrix Cell */}
+                                      {Object.keys(batchGroupsInCell).map(groupId => {
+                                        const eventsInGroup = batchGroupsInCell[groupId];
+                                        const masterEv = eventsInGroup.find(e => e.extendedProps?.batchGroup?.role === 'master');
+                                        const subEvs = eventsInGroup.filter(e => e.extendedProps?.batchGroup?.role === 'sub');
 
-                                      {/* Work Order Header Details */}
-                                      <div className="prod-card-sub" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                        {isJobCard ? (
-                                          <>
-                                            {ext.workOrder && <span className="prod-parent-wo-tag" style={{ fontSize: '11px', color: '#475569' }}>WO: {ext.workOrder}</span>}
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
-                                              <span className="prod-doc-id-badge badge-jc">JC: {ext.docName}</span>
-                                              {ext.timeRange && (
-                                                <span className="prod-time-range-badge" style={{ fontSize: '10px', color: '#1e3a8a', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '1px 5px', borderRadius: '4px', fontWeight: '600' }}>
-                                                  🕒 {ext.timeRange}
-                                                </span>
-                                              )}
-                                            </div>
-                                            {ext.operation && <span className="prod-op-tag" style={{ alignSelf: 'flex-start', marginTop: '2px' }}>{ext.operation}</span>}
-                                          </>
-                                        ) : (
-                                          <>
-                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
-                                              <span className="prod-doc-id-badge badge-wo" style={{ alignSelf: 'flex-start' }}>WO: {ext.docName}</span>
-                                              <span className="prod-status-tag-sm" style={{ fontSize: '9px', color: '#64748b', fontWeight: '700' }}>{ext.status}</span>
-                                            </div>
+                                        // Lookup full group info from batchGroups state or build from events
+                                        const stateGroup = batchGroups.find(g => g.id === groupId);
+                                        const itemCode = eventsInGroup[0]?.extendedProps?.itemCode || 'Product';
+                                        const batchCountVal = stateGroup?.batchCount || eventsInGroup[0]?.extendedProps?.batchGroup?.batchCount || subEvs.length;
+                                        const qtyPerBatchVal = stateGroup?.qtyPerBatch || eventsInGroup[0]?.extendedProps?.batchGroup?.qtyPerBatch || eventsInGroup[0]?.extendedProps?.qty || 0;
+                                        const totalQtyVal = stateGroup?.totalQty || (qtyPerBatchVal * batchCountVal);
+                                        const masterWOName = stateGroup?.masterWO || masterEv?.extendedProps?.docName || (eventsInGroup[0]?.extendedProps?.batchGroup?.masterWO);
+                                        const masterStatus = stateGroup?.masterStatus || masterEv?.extendedProps?.status || 'Draft';
 
-                                            {ext.timeRange && (
-                                              <span
-                                                className="prod-time-range-badge clickable-time-badge"
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  if (!dragLocked) openEditTimeModal(ev);
-                                                }}
-                                                title={dragLocked ? 'Locked from rescheduling' : 'Click to edit date & time'}
-                                                style={{ fontSize: '10px', color: '#1e3a8a', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '1px 5px', borderRadius: '4px', alignSelf: 'flex-start', fontWeight: '600', display: 'inline-flex', alignItems: 'center', gap: '3px', cursor: dragLocked ? 'not-allowed' : 'pointer' }}
-                                              >
-                                                🕒 {ext.timeRange} {!dragLocked && <span style={{ fontSize: '9px', opacity: 0.7 }}>✏️</span>}
-                                              </span>
-                                            )}
+                                        const groupColor = getBatchGroupColor(groupId);
 
-                                            {/* Dropdown list view of all Job Cards inside this single Work Order box */}
-                                            {jobCards.length > 0 ? (
-                                              <details className="prod-card-jc-dropdown" onClick={(e) => e.stopPropagation()}>
-                                                <summary className="prod-card-jc-summary">
-                                                  <span className="jc-summary-label">📋 Job Cards ({jobCards.length})</span>
-                                                  <span className="jc-summary-caret">▾</span>
-                                                </summary>
-                                                <div className="prod-card-jc-dropdown-menu">
-                                                  {jobCards.map(jc => (
+                                        // Compute progress
+                                        const subWOsList = stateGroup?.subWOs && stateGroup.subWOs.length > 0
+                                          ? stateGroup.subWOs
+                                          : subEvs.map(e => ({
+                                              name: e.extendedProps?.docName,
+                                              batchNumber: e.extendedProps?.batchGroup?.batchNumber,
+                                              status: e.extendedProps?.status || 'Draft'
+                                            }));
+
+                                        const completedCount = subWOsList.filter(s => (s.status || '').toLowerCase() === 'completed').length;
+                                        const pct = subWOsList.length > 0 ? Math.round((completedCount / subWOsList.length) * 100) : 0;
+
+                                        const isGroupLocked = ['in process', 'completed'].includes((masterStatus || '').toLowerCase()) ||
+                                          subWOsList.some(s => ['in process', 'completed'].includes((s.status || '').toLowerCase()));
+
+                                        const targetEditEv = masterEv || eventsInGroup[0];
+
+                                        return (
+                                          <div
+                                            key={groupId}
+                                            draggable={!isGroupLocked}
+                                            onDragStart={(e) => !isGroupLocked && handleBatchGroupDragStart(e, groupId, eventsInGroup)}
+                                            onDragEnd={handleDragEnd}
+                                            className={`matrix-batch-card ${isGroupLocked ? 'card-locked' : ''}`}
+                                            style={{ borderLeftColor: groupColor, cursor: isGroupLocked ? 'default' : 'grab' }}
+                                            title={`📦 Batch Group: ${groupId}\nItem: ${itemCode}\nBatches: ${batchCountVal} (${qtyPerBatchVal} kg each)\nTotal: ${totalQtyVal} kg\nStatus: ${masterStatus}\n\n👉 Click time to edit schedule\n👉 Click ▾ to view sub-orders\n👉 Drag & drop to reschedule entire group`}
+                                          >
+                                            <div className="matrix-batch-header">
+                                              <div className="matrix-batch-top">
+                                                <span className="batch-pill-badge" style={{ backgroundColor: groupColor }}>{groupId}</span>
+                                                <span className="matrix-batch-item-name">{itemCode}</span>
+                                                <span className="matrix-batch-qty-tag">{totalQtyVal} kg</span>
+                                                <span className="matrix-batch-date">{day.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                                              </div>
+                                              {(() => {
+                                                const starts = eventsInGroup.map(e => new Date(e.start)).filter(d => !isNaN(d));
+                                                const ends = eventsInGroup.map(e => new Date(e.end)).filter(d => !isNaN(d));
+                                                const earliest = starts.length > 0 ? new Date(Math.min(...starts)) : null;
+                                                const latest = ends.length > 0 ? new Date(Math.max(...ends)) : null;
+                                                if (earliest && latest) {
+                                                  const fmt = d => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+                                                  return (
                                                     <div
-                                                      key={jc.name}
-                                                      className="prod-card-jc-dropdown-item"
+                                                      className="matrix-batch-time clickable-time-badge"
                                                       onClick={(e) => {
                                                         e.stopPropagation();
-                                                        openDoc('jobcard', jc.name);
+                                                        if (!isGroupLocked && targetEditEv) {
+                                                          openEditTimeModal(targetEditEv);
+                                                        }
                                                       }}
-                                                      title={`Click to open Job Card ${jc.name} in ERPNext\nOperation: ${jc.operation || 'N/A'}\nWorkstation: ${jc.workstation || 'N/A'}\nStatus: ${jc.status || 'N/A'}`}
+                                                      title={isGroupLocked ? 'Locked from rescheduling (In Process / Completed)' : 'Click to edit date & time'}
+                                                      style={{ cursor: isGroupLocked ? 'not-allowed' : 'pointer' }}
                                                     >
-                                                      <div className="jc-item-info">
-                                                        <div className="jc-item-name-row">
-                                                          <span className="jc-item-name">{jc.name}</span>
-                                                          {jc.status && (
-                                                            <span className="jc-item-status-pill">
-                                                              <span className="jc-item-status-dot" style={{ backgroundColor: getStatusColor(jc.status) }}></span>
-                                                              {jc.status}
+                                                      🕐 {fmt(earliest)} – {fmt(latest)} {!isGroupLocked && <span style={{ fontSize: '9px', opacity: 0.7 }}>✏️</span>}
+                                                    </div>
+                                                  );
+                                                }
+                                                return null;
+                                              })()}
+                                              <div className="batch-progress-container">
+                                                <div className="batch-progress-bar">
+                                                  <div className="batch-progress-fill" style={{ width: `${pct}%`, backgroundColor: groupColor }}></div>
+                                                </div>
+                                                <span className="batch-progress-label">{completedCount}/{subWOsList.length} · {pct}%</span>
+                                              </div>
+                                            </div>
+
+                                            {/* Sub Work Orders Dropdown */}
+                                            <details className="matrix-batch-details" onClick={(e) => e.stopPropagation()}>
+                                              <summary className="matrix-batch-summary">
+                                                <span>📋 {subWOsList.length} Orders</span>
+                                                <span className="matrix-batch-caret">▾</span>
+                                              </summary>
+                                              <div className="matrix-batch-sub-list">
+                                                {subWOsList.map(sub => {
+                                                  const t = woTimers[sub.name];
+                                                  const timerStatus = t?.status || 'idle';
+                                                  const totalSecs = getWOTimerSeconds(sub.name);
+                                                  const isCompleted = sub.status === 'Completed' || timerStatus === 'completed';
+
+                                                  return (
+                                                    <div
+                                                      key={sub.name}
+                                                      className="matrix-batch-sub-item"
+                                                      onClick={(e) => { e.stopPropagation(); openDoc('workorder', sub.name); }}
+                                                      title={`Click to open ${sub.name} in ERPNext`}
+                                                    >
+                                                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                        <span className="matrix-sub-badge">#{sub.batchNumber}</span>
+                                                        <span className="matrix-sub-wo">{sub.name}</span>
+                                                      </div>
+
+                                                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                        {/* Sub-item Timer Action Controls */}
+                                                        <div className="matrix-sub-timer-actions" onClick={(e) => e.stopPropagation()}>
+                                                          {isCompleted ? (
+                                                            <span className="sub-timer-done" title={`Total production time: ${formatTimerDuration(totalSecs)}`}>
+                                                              ✓ {formatTimerDuration(totalSecs)}
                                                             </span>
+                                                          ) : timerStatus === 'running' ? (
+                                                            <div className="sub-timer-live">
+                                                              <span className="timer-pulse-dot-sm"></span>
+                                                              <span className="timer-digits-sm">{formatTimerDuration(totalSecs)}</span>
+                                                              <button className="sub-timer-btn" onClick={(e) => handlePauseTimer(sub.name, e)} title="Pause Timer">⏸</button>
+                                                              <button className="sub-timer-btn finish" onClick={(e) => handleFinishTimer(sub.name, e)} title="Finish Work Order">⏹</button>
+                                                            </div>
+                                                          ) : timerStatus === 'paused' ? (
+                                                            <div className="sub-timer-live paused">
+                                                              <span className="timer-paused-dot-sm"></span>
+                                                              <span className="timer-digits-sm">{formatTimerDuration(totalSecs)}</span>
+                                                              <button className="sub-timer-btn resume" onClick={(e) => handleResumeTimer(sub.name, e)} title="Resume Timer">▶</button>
+                                                              <button className="sub-timer-btn finish" onClick={(e) => handleFinishTimer(sub.name, e)} title="Finish Work Order">⏹</button>
+                                                            </div>
+                                                          ) : (
+                                                            <button className="sub-timer-btn start" onClick={(e) => handleStartTimer(sub.name, e)} title="Start Production">
+                                                              ▶ Start
+                                                            </button>
                                                           )}
                                                         </div>
-                                                        {jc.operation && (
-                                                          <span className="jc-item-op">
-                                                            {jc.operation} {jc.workstation ? `· ${jc.workstation}` : ''}
-                                                          </span>
+
+                                                        <span className="matrix-sub-status" style={{ backgroundColor: getStatusColorWO(sub.status) }}>
+                                                          {sub.status || 'Draft'}
+                                                        </span>
+                                                      </div>
+                                                    </div>
+                                                  );
+                                                })}
+                                              </div>
+                                            </details>
+                                          </div>
+                                        );
+                                      })}
+
+                                      {/* 2. Render Standalone Events (Job Cards & non-batch Work Orders) */}
+                                      {standaloneEvents.map(ev => {
+                                        const ext = ev.extendedProps || {};
+                                        const itemCode = ext.itemCode || ext.raw?.production_item || ext.docName;
+                                        const qty = ext.qty || ext.raw?.for_quantity || ext.raw?.qty;
+                                        const isJobCard = ext.type === 'jobcard';
+                                        const jobCards = Array.isArray(ext.jobCards) ? ext.jobCards : [];
+                                        const rawOps = Array.isArray(ext.raw?.operations) ? ext.raw.operations : [];
+
+                                        const dragLocked = isWODragLocked(ev);
+
+                                        return (
+                                          <div
+                                            key={ev.id}
+                                            draggable={!dragLocked}
+                                            onDragStart={(e) => handleDragStart(e, ev)}
+                                            onDragEnd={handleDragEnd}
+                                            onClick={() => openDoc(ext.type, ext.docName)}
+                                            className={`prod-card ${isJobCard ? 'card-jobcard' : 'card-workorder'}${dragLocked ? ' card-locked' : ''}`}
+                                            style={{ borderLeftColor: ev.backgroundColor || '#2563eb', cursor: dragLocked ? 'not-allowed' : undefined }}
+                                            title={dragLocked ? `🔒 [${ext.type.toUpperCase()}] ${ext.docName} — ${ext.status} (locked from rescheduling)\nItem: ${itemCode}\nQty: ${qty}\n\n👉 Click to open in ERPNext` : `[${ext.type.toUpperCase()}] ${ext.docName}\nItem: ${itemCode}\nQty: ${qty}\nStatus: ${ext.status}\nWorkstation: ${ext.workstation || 'N/A'}${jobCards.length > 0 ? `\n\nJob Cards:\n` + jobCards.map(j => `• ${j.name}: ${j.operation || ''} (${j.status})`).join('\n') : ''}\n\n👉 Click to open in ERPNext\n👉 Drag to reschedule`}
+                                          >
+                                            {/* Lock indicator for started/completed WOs */}
+                                            {dragLocked && (
+                                              <span className="prod-lock-badge" title={`${ext.status} — cannot be rescheduled`}>🔒</span>
+                                            )}
+                                            {/* Primary Row: Item Code & Quantity */}
+                                            <div className="prod-card-main" style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '3px' }}>
+                                              <span className="prod-item-code">{itemCode}</span>
+                                              {qty !== undefined && qty !== null && qty !== '' && (
+                                                <span className="prod-qty-badge"> : {qty}</span>
+                                              )}
+                                            </div>
+
+                                            {/* Work Order Header Details */}
+                                            <div className="prod-card-sub" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                              {isJobCard ? (
+                                                <>
+                                                  {ext.workOrder && <span className="prod-parent-wo-tag" style={{ fontSize: '11px', color: '#475569' }}>WO: {ext.workOrder}</span>}
+                                                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                                                    <span className="prod-doc-id-badge badge-jc">JC: {ext.docName}</span>
+                                                    {ext.timeRange && (
+                                                      <span className="prod-time-range-badge" style={{ fontSize: '10px', color: '#1e3a8a', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '1px 5px', borderRadius: '4px', fontWeight: '600' }}>
+                                                        🕒 {ext.timeRange}
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                  {ext.operation && <span className="prod-op-tag" style={{ alignSelf: 'flex-start', marginTop: '2px' }}>{ext.operation}</span>}
+                                                </>
+                                              ) : (
+                                                <>
+                                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
+                                                    <span className="prod-doc-id-badge badge-wo" style={{ alignSelf: 'flex-start' }}>WO: {ext.docName}</span>
+                                                    <span className="prod-status-tag-sm" style={{ fontSize: '9px', color: '#64748b', fontWeight: '700' }}>{ext.status}</span>
+                                                  </div>
+
+                                                  {ext.timeRange && (
+                                                    <span
+                                                      className="prod-time-range-badge clickable-time-badge"
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        if (!dragLocked) openEditTimeModal(ev);
+                                                      }}
+                                                      title={dragLocked ? 'Locked from rescheduling' : 'Click to edit date & time'}
+                                                      style={{ fontSize: '10px', color: '#1e3a8a', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '1px 5px', borderRadius: '4px', alignSelf: 'flex-start', fontWeight: '600', display: 'inline-flex', alignItems: 'center', gap: '3px', cursor: dragLocked ? 'not-allowed' : 'pointer' }}
+                                                    >
+                                                      🕒 {ext.timeRange} {!dragLocked && <span style={{ fontSize: '9px', opacity: 0.7 }}>✏️</span>}
+                                                    </span>
+                                                  )}
+
+                                                  {/* Interactive Live Production Timer Execution Bar */}
+                                                  {(() => {
+                                                    const t = woTimers[ext.docName];
+                                                    const timerStatus = t?.status || 'idle';
+                                                    const totalSecs = getWOTimerSeconds(ext.docName);
+                                                    const isCompleted = ext.status === 'Completed' || timerStatus === 'completed';
+
+                                                    return (
+                                                      <div className="wo-timer-bar" onClick={(e) => e.stopPropagation()}>
+                                                        {isCompleted ? (
+                                                          <div className="wo-timer-completed">
+                                                            <span className="timer-done-icon">✓</span>
+                                                            <span>Completed ({formatTimerDuration(totalSecs)})</span>
+                                                          </div>
+                                                        ) : timerStatus === 'running' ? (
+                                                          <div className="wo-timer-running">
+                                                            <div className="timer-clock">
+                                                              <span className="timer-pulse-dot"></span>
+                                                              <span className="timer-digits">{formatTimerDuration(totalSecs)}</span>
+                                                            </div>
+                                                            <div className="timer-btn-group">
+                                                              <button className="timer-btn btn-pause" onClick={(e) => handlePauseTimer(ext.docName, e)} title="Pause Timer">⏸ Pause</button>
+                                                              <button className="timer-btn btn-finish" onClick={(e) => handleFinishTimer(ext.docName, e)} title="Finish Work Order">⏹ Finish</button>
+                                                            </div>
+                                                          </div>
+                                                        ) : timerStatus === 'paused' ? (
+                                                          <div className="wo-timer-paused">
+                                                            <div className="timer-clock paused">
+                                                              <span className="timer-paused-dot"></span>
+                                                              <span className="timer-digits">{formatTimerDuration(totalSecs)}</span>
+                                                            </div>
+                                                            <div className="timer-btn-group">
+                                                              <button className="timer-btn btn-resume" onClick={(e) => handleResumeTimer(ext.docName, e)} title="Resume Timer">▶ Resume</button>
+                                                              <button className="timer-btn btn-finish" onClick={(e) => handleFinishTimer(ext.docName, e)} title="Finish Work Order">⏹ Finish</button>
+                                                            </div>
+                                                          </div>
+                                                        ) : (
+                                                          <div className="wo-timer-idle">
+                                                            <button className="timer-btn btn-start" onClick={(e) => handleStartTimer(ext.docName, e)} title="Start Production Timer">
+                                                              ▶ Start Production
+                                                            </button>
+                                                          </div>
                                                         )}
                                                       </div>
-                                                    </div>
-                                                  ))}
-                                                </div>
-                                              </details>
-                                            ) : rawOps.length > 0 ? (
-                                              <details className="prod-card-jc-dropdown" onClick={(e) => e.stopPropagation()}>
-                                                <summary className="prod-card-jc-summary">
-                                                  <span className="jc-summary-label">⚙️ Ops ({rawOps.length}) · Draft</span>
-                                                  <span className="jc-summary-caret">▾</span>
-                                                </summary>
-                                                <div className="prod-card-jc-dropdown-menu">
-                                                  {rawOps.map((op, idx) => (
-                                                    <div key={idx} className="prod-card-jc-dropdown-item op-preview">
-                                                      <div className="jc-item-info">
-                                                        <div className="jc-item-name-row">
-                                                          <span className="jc-item-name">{op.operation}</span>
-                                                          {op.time_in_mins ? (
-                                                            <span className="jc-item-status-pill">
-                                                              <span className="jc-item-status-dot" style={{ backgroundColor: '#94a3b8' }}></span>
-                                                              {op.time_in_mins}m
-                                                            </span>
-                                                          ) : null}
-                                                        </div>
-                                                        {op.workstation && <span className="jc-item-op">{op.workstation}</span>}
-                                                      </div>
-                                                    </div>
-                                                  ))}
-                                                </div>
-                                              </details>
-                                            ) : (
-                                              ext.operation && (
-                                                <span className="prod-op-tag" style={{ alignSelf: 'flex-start', marginTop: '2px' }}>{ext.operation}</span>
-                                              )
-                                            )}
-                                          </>
-                                        )}
-                                      </div>
+                                                    );
+                                                  })()}
 
-                                      {/* Status dot */}
-                                      <span
-                                        className="prod-status-dot"
-                                        style={{ backgroundColor: ev.backgroundColor }}
-                                      />
-                                    </div>
+                                                  {/* Dropdown list view of all Job Cards inside this single Work Order box */}
+                                                  {jobCards.length > 0 ? (
+                                                    <details className="prod-card-jc-dropdown" onClick={(e) => e.stopPropagation()}>
+                                                      <summary className="prod-card-jc-summary">
+                                                        <span className="jc-summary-label">📋 Job Cards ({jobCards.length})</span>
+                                                        <span className="jc-summary-caret">▾</span>
+                                                      </summary>
+                                                      <div className="prod-card-jc-dropdown-menu">
+                                                        {jobCards.map(jc => (
+                                                          <div
+                                                            key={jc.name}
+                                                            className="prod-card-jc-dropdown-item"
+                                                            onClick={(e) => {
+                                                              e.stopPropagation();
+                                                              openDoc('jobcard', jc.name);
+                                                            }}
+                                                            title={`Click to open Job Card ${jc.name} in ERPNext\nOperation: ${jc.operation || 'N/A'}\nWorkstation: ${jc.workstation || 'N/A'}\nStatus: ${jc.status || 'N/A'}`}
+                                                          >
+                                                            <div className="jc-item-info">
+                                                              <div className="jc-item-name-row">
+                                                                <span className="jc-item-name">{jc.name}</span>
+                                                                {jc.status && (
+                                                                  <span className="jc-item-status-pill">
+                                                                    <span className="jc-item-status-dot" style={{ backgroundColor: getStatusColor(jc.status) }}></span>
+                                                                    {jc.status}
+                                                                  </span>
+                                                                )}
+                                                              </div>
+                                                              {jc.operation && (
+                                                                <span className="jc-item-op">
+                                                                  {jc.operation} {jc.workstation ? `· ${jc.workstation}` : ''}
+                                                                </span>
+                                                              )}
+                                                            </div>
+                                                          </div>
+                                                        ))}
+                                                      </div>
+                                                    </details>
+                                                  ) : rawOps.length > 0 ? (
+                                                    <details className="prod-card-jc-dropdown" onClick={(e) => e.stopPropagation()}>
+                                                      <summary className="prod-card-jc-summary">
+                                                        <span className="jc-summary-label">⚙️ Ops ({rawOps.length}) · Draft</span>
+                                                        <span className="jc-summary-caret">▾</span>
+                                                      </summary>
+                                                      <div className="prod-card-jc-dropdown-menu">
+                                                        {rawOps.map((op, idx) => (
+                                                          <div key={idx} className="prod-card-jc-dropdown-item op-preview">
+                                                            <div className="jc-item-info">
+                                                              <div className="jc-item-name-row">
+                                                                <span className="jc-item-name">{op.operation}</span>
+                                                                {op.time_in_mins ? (
+                                                                  <span className="jc-item-status-pill">
+                                                                    <span className="jc-item-status-dot" style={{ backgroundColor: '#94a3b8' }}></span>
+                                                                    {op.time_in_mins}m
+                                                                  </span>
+                                                                ) : null}
+                                                              </div>
+                                                              {op.workstation && <span className="jc-item-op">{op.workstation}</span>}
+                                                            </div>
+                                                          </div>
+                                                        ))}
+                                                      </div>
+                                                    </details>
+                                                  ) : (
+                                                    ext.operation && (
+                                                      <span className="prod-op-tag" style={{ alignSelf: 'flex-start', marginTop: '2px' }}>{ext.operation}</span>
+                                                    )
+                                                  )}
+                                                </>
+                                              )}
+                                            </div>
+
+                                            {/* Status dot */}
+                                            <span
+                                              className="prod-status-dot"
+                                              style={{ backgroundColor: ev.backgroundColor }}
+                                            />
+                                          </div>
+                                        );
+                                      })}
+                                    </>
                                   );
-                                })}
+                                })()}
                               </div>
                             </td>
                           );
@@ -1502,9 +2052,43 @@ const Scheduler = () => {
                 </select>
               </div>
 
+              {/* Batch Creation Mode Toggle */}
+              <div className="wo-form-group wo-batch-toggle-group">
+                <div className="wo-batch-toggle-header">
+                  <label className="wo-form-label" style={{ marginBottom: 0, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <input
+                      type="checkbox"
+                      checked={batchMode}
+                      onChange={e => setBatchMode(e.target.checked)}
+                      style={{ width: '16px', height: '16px', cursor: 'pointer', accentColor: '#2563eb' }}
+                    />
+                    <span>📦 Batch Creation Mode (Master + Sub Orders)</span>
+                  </label>
+                </div>
+                {batchMode && (
+                  <div className="wo-batch-options" style={{ marginTop: '10px', padding: '12px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                    <div className="wo-form-group" style={{ marginBottom: 0 }}>
+                      <label className="wo-form-label">Number of Batches (Sub-Work-Orders) <span className="req">*</span></label>
+                      <input
+                        className="wo-form-input"
+                        type="number"
+                        min="2"
+                        max="50"
+                        value={batchCount}
+                        onChange={e => setBatchCount(parseInt(e.target.value, 10) || 2)}
+                        required={batchMode}
+                      />
+                      <small style={{ color: '#64748b', fontSize: '11px', display: 'block', marginTop: '4px' }}>
+                        Will create 1 Master WO + {batchCount} Sub-Work-Orders ({woForm.qty || 0} units per batch, total { (Number(woForm.qty) || 0) * batchCount } units) on {woForm.planned_start_date}.
+                      </small>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Quantity */}
               <div className="wo-form-group">
-                <label className="wo-form-label">Quantity to Manufacture <span className="req">*</span></label>
+                <label className="wo-form-label">{batchMode ? 'Quantity per Batch' : 'Quantity to Manufacture'} <span className="req">*</span></label>
                 <input
                   className="wo-form-input"
                   type="number"
@@ -1581,10 +2165,90 @@ const Scheduler = () => {
                   Cancel
                 </button>
                 <button type="submit" className="wo-btn-submit" disabled={woSubmitting}>
-                  {woSubmitting ? <span className="spin">⏳</span> : '🏭'} {woSubmitting ? 'Creating...' : 'Create Work Order'}
+                  {woSubmitting ? <span className="spin">⏳</span> : (batchMode ? '📦' : '🏭')} {woSubmitting ? 'Creating...' : (batchMode ? `Create Batch Group (${batchCount} Batches)` : 'Create Work Order')}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= BATCH WORK ORDER TRACKING PANEL ================= */}
+      {showBatchPanel && (
+        <div className="batch-panel-drawer">
+          <div className="batch-panel-header">
+            <div className="batch-panel-title">
+              <span className="batch-panel-icon">📦</span>
+              <div>
+                <h3>Batch Work Order Tracking</h3>
+                <p>Track Master and Sub-Work-Order Groups</p>
+              </div>
+            </div>
+            <button className="batch-panel-close" onClick={() => setShowBatchPanel(false)}>✕</button>
+          </div>
+
+          <div className="batch-panel-body">
+            {batchPanelLoading ? (
+              <div className="batch-panel-empty">Loading batch groups...</div>
+            ) : batchGroups.length === 0 ? (
+              <div className="batch-panel-empty">
+                <p>No batch work orders found.</p>
+                <small>Create work orders with "Batch Creation Mode" enabled to track master and sub-orders here.</small>
+              </div>
+            ) : (
+              <div className="batch-groups-list">
+                {batchGroups.map(group => {
+                  const groupColor = getBatchGroupColor(group.id);
+                  const isExpanded = expandedBatchGroup === group.id;
+
+                  return (
+                    <div key={group.id} className="batch-group-card" style={{ borderLeftColor: groupColor }}>
+                      <div className="batch-group-summary" onClick={() => setExpandedBatchGroup(isExpanded ? null : group.id)}>
+                        <div className="batch-group-top">
+                          <span className="batch-group-id" style={{ color: groupColor }}>{group.id}</span>
+                          <span className="batch-group-date">📅 {group.plannedDate}</span>
+                        </div>
+                        <div className="batch-group-item">
+                          <strong>{group.productionItem}</strong> · {group.batchCount} batches ({group.qtyPerBatch} kg/batch = total {group.totalQty} kg)
+                        </div>
+                        <div className="batch-group-master">
+                          Master WO: <span className="clickable-link" onClick={(e) => { e.stopPropagation(); openDoc('workorder', group.masterWO); }}>{group.masterWO}</span> ({group.masterStatus || 'Draft'})
+                        </div>
+
+                        {/* Progress Bar */}
+                        <div className="batch-progress-container">
+                          <div className="batch-progress-bar">
+                            <div className="batch-progress-fill" style={{ width: `${group.progress?.percentage || 0}%`, backgroundColor: groupColor }}></div>
+                          </div>
+                          <span className="batch-progress-text">{group.progress?.completed || 0}/{group.progress?.total || group.batchCount} Completed ({group.progress?.percentage || 0}%)</span>
+                        </div>
+
+                        <div className="batch-group-expand-hint">
+                          {isExpanded ? '▲ Hide Sub-Work-Orders' : `▼ View ${group.subWOs?.length || 0} Sub-Work-Orders`}
+                        </div>
+                      </div>
+
+                      {/* Sub Work Orders List */}
+                      {isExpanded && (
+                        <div className="batch-sub-list">
+                          {(group.subWOs || []).map(sub => (
+                            <div key={sub.name} className="batch-sub-item" onClick={() => openDoc('workorder', sub.name)}>
+                              <div className="batch-sub-name-row">
+                                <span className="batch-sub-badge">Batch {sub.batchNumber}/{group.batchCount}</span>
+                                <span className="batch-sub-wo">{sub.name}</span>
+                              </div>
+                              <span className="batch-sub-status" style={{ backgroundColor: getStatusColorWO(sub.status) }}>
+                                {sub.status || 'Draft'}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}

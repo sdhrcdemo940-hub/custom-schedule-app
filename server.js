@@ -4,6 +4,8 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -18,9 +20,17 @@ const ERPNEXT_URL = process.env.ERPNEXT_URL;
 const ERPNEXT_API_KEY = process.env.ERPNEXT_API_KEY;
 const ERPNEXT_API_SECRET = process.env.ERPNEXT_API_SECRET;
 
-// Create Axios instance for ERPNext
+// Create Axios instances for ERPNext
 const erpnextAPI = axios.create({
   baseURL: `${ERPNEXT_URL}/api/resource`,
+  headers: {
+    Authorization: `token ${ERPNEXT_API_KEY}:${ERPNEXT_API_SECRET}`,
+    'Content-Type': 'application/json'
+  }
+});
+
+const erpnextMethodAPI = axios.create({
+  baseURL: `${ERPNEXT_URL}/api/method`,
   headers: {
     Authorization: `token ${ERPNEXT_API_KEY}:${ERPNEXT_API_SECRET}`,
     'Content-Type': 'application/json'
@@ -30,6 +40,66 @@ const erpnextAPI = axios.create({
 // In-memory map: { workOrderName -> workstationName }
 // Used to persist the intended workstation for draft WOs that have no operations yet.
 const woWorkstationMap = {};
+
+// ==================== BATCH GROUP STORAGE ====================
+
+const BATCH_GROUPS_FILE = path.join(__dirname, 'batch-groups.json');
+
+const loadBatchGroups = () => {
+  try {
+    if (fs.existsSync(BATCH_GROUPS_FILE)) {
+      const raw = fs.readFileSync(BATCH_GROUPS_FILE, 'utf-8');
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.warn('Could not load batch-groups.json:', e.message);
+  }
+  return {};
+};
+
+const saveBatchGroups = (groups) => {
+  try {
+    fs.writeFileSync(BATCH_GROUPS_FILE, JSON.stringify(groups, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Failed to save batch-groups.json:', e.message);
+  }
+};
+
+const generateBatchGroupId = () => {
+  const groups = loadBatchGroups();
+  const year = new Date().getFullYear();
+  const prefix = `BWO-${year}-`;
+  const existingNums = Object.keys(groups)
+    .filter(k => k.startsWith(prefix))
+    .map(k => parseInt(k.replace(prefix, ''), 10))
+    .filter(n => !isNaN(n));
+  const next = existingNums.length > 0 ? Math.max(...existingNums) + 1 : 1;
+  return `${prefix}${String(next).padStart(5, '0')}`;
+};
+
+// ==================== WORK ORDER TIMER STORAGE ====================
+
+const TIMERS_FILE = path.join(__dirname, 'wo-timers.json');
+
+const loadTimers = () => {
+  try {
+    if (fs.existsSync(TIMERS_FILE)) {
+      const raw = fs.readFileSync(TIMERS_FILE, 'utf-8');
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.warn('Could not load wo-timers.json:', e.message);
+  }
+  return {};
+};
+
+const saveTimers = (timers) => {
+  try {
+    fs.writeFileSync(TIMERS_FILE, JSON.stringify(timers, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Failed to save wo-timers.json:', e.message);
+  }
+};
 
 const normalizeJobCardTimes = (jobCard) => {
   const scheduledLogs = Array.isArray(jobCard.scheduled_time_logs) ? jobCard.scheduled_time_logs : [];
@@ -294,20 +364,38 @@ app.post('/api/work-orders', async (req, res) => {
     // Without this, the operations table is empty in REST creation, causing ERPNext to create 0 Job Cards upon submission.
     let woOperations = [];
     try {
+      // Get valid workstation list to avoid LinkValidationError
+      let validStationNames = new Set();
+      try {
+        const wsListResp = await erpnextAPI.get('/Workstation', {
+          params: { fields: JSON.stringify(['name']), limit_page_length: 500 }
+        });
+        (wsListResp.data.data || []).forEach(w => validStationNames.add(w.name));
+      } catch (e) {
+        // Ignore fallback
+      }
+
       const bomResp = await erpnextAPI.get(`/BOM/${bom_no}`);
       const bomData = bomResp.data.data;
       if (Array.isArray(bomData.operations) && bomData.operations.length > 0) {
-        woOperations = bomData.operations.map(op => ({
-          operation: op.operation,
-          workstation: (workstation && workstation !== 'Unassigned') ? workstation : (op.workstation || ''),
-          workstation_type: op.workstation_type || '',
-          time_in_mins: op.time_in_mins || 0,
-          sequence_id: op.sequence_id || 1,
-          bom: bom_no,
-          description: op.description || op.operation || '',
-          hour_rate: op.hour_rate || 0,
-          batch_size: op.batch_size || 1
-        }));
+        woOperations = bomData.operations.map(op => {
+          let opStation = (workstation && workstation !== 'Unassigned') ? workstation : (op.workstation || '');
+          if (opStation && !validStationNames.has(opStation)) {
+            // If the BOM workstation does not exist in ERPNext, clear it or use first valid station
+            opStation = validStationNames.size > 0 ? Array.from(validStationNames)[0] : '';
+          }
+          return {
+            operation: op.operation,
+            workstation: opStation,
+            workstation_type: op.workstation_type || '',
+            time_in_mins: op.time_in_mins || 0,
+            sequence_id: op.sequence_id || 1,
+            bom: bom_no,
+            description: op.description || op.operation || '',
+            hour_rate: op.hour_rate || 0,
+            batch_size: op.batch_size || 1
+          };
+        });
       }
     } catch (bomErr) {
       console.warn(`Could not fetch BOM ${bom_no} operations:`, bomErr.message);
@@ -416,6 +504,734 @@ app.post('/api/work-orders', async (req, res) => {
       error: erpData?.message || error.message,
       details: erpData
     });
+  }
+});
+
+// ==================== WORK ORDER TIMER / EXECUTION ENDPOINTS ====================
+
+// Get all timers state
+app.get('/api/work-orders/timers', (req, res) => {
+  const timers = loadTimers();
+  res.json({ success: true, timers });
+});
+
+// Helper: Top-up missing raw material item stock in ERPNext
+const autoReplenishStock = async (itemCode, minQty = 5000) => {
+  try {
+    const pad = n => String(n).padStart(2, '0');
+    const d = new Date();
+    const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+    const receiptDoc = {
+      stock_entry_type: 'Material Receipt',
+      purpose: 'Material Receipt',
+      company: 'SHRDC Demo',
+      posting_date: today,
+      items: [
+        {
+          item_code: itemCode,
+          t_warehouse: 'Stores - SD',
+          qty: minQty,
+          basic_rate: 10,
+          allow_zero_valuation_rate: 1
+        }
+      ]
+    };
+
+    const r = await erpnextAPI.post('/Stock Entry', receiptDoc);
+    const steName = r.data.data.name;
+    await erpnextAPI.put(`/Stock Entry/${steName}`, { docstatus: 1 });
+    console.log(`📦 Auto-replenished ${minQty} units of ${itemCode} (Receipt: ${steName})`);
+    return steName;
+  } catch (err) {
+    console.warn(`Could not auto-replenish stock for ${itemCode}:`, err.message);
+    return null;
+  }
+};
+
+// Helper: Clean up or submit existing draft Stock Entries for a Work Order
+const cleanDraftStockEntries = async (woId) => {
+  try {
+    const drafts = await erpnextAPI.get('/Stock Entry', {
+      params: {
+        fields: JSON.stringify(['name', 'stock_entry_type', 'docstatus']),
+        filters: JSON.stringify([['work_order', '=', woId], ['docstatus', '=', 0]])
+      }
+    });
+
+    for (const ste of (drafts.data.data || [])) {
+      try {
+        await erpnextAPI.put(`/Stock Entry/${ste.name}`, { docstatus: 1 });
+        console.log(`Submitted existing draft Stock Entry ${ste.name} for WO ${woId}`);
+      } catch (submitErr) {
+        // If cannot submit, delete the blocking draft
+        try {
+          await erpnextAPI.delete(`/Stock Entry/${ste.name}`);
+          console.log(`Deleted un-submittable draft Stock Entry ${ste.name} for WO ${woId}`);
+        } catch (delErr) {
+          console.warn(`Could not delete draft ${ste.name}:`, delErr.message);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn(`Draft cleanup warning for WO ${woId}:`, e.message);
+  }
+};
+
+// Helper: Perform Material Transfer for Manufacture in ERPNext (with self-healing)
+const performMaterialTransfer = async (woId, qty) => {
+  await cleanDraftStockEntries(woId);
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const prep = await erpnextMethodAPI.post('/erpnext.manufacturing.doctype.work_order.work_order.make_stock_entry', {
+        work_order_id: woId,
+        purpose: 'Material Transfer for Manufacture',
+        qty: qty || undefined
+      });
+      const steDoc = prep.data.message;
+      if (!steDoc || !Array.isArray(steDoc.items) || steDoc.items.length === 0) {
+        console.log(`No items to transfer for Work Order ${woId} (possibly already transferred)`);
+        return 'ALREADY_TRANSFERRED';
+      }
+
+      steDoc.items.forEach(item => {
+        item.allow_zero_valuation_rate = 1;
+        if (!item.basic_rate || item.basic_rate === 0) item.basic_rate = 1;
+      });
+
+      const createResp = await erpnextAPI.post('/Stock Entry', steDoc);
+      const steName = createResp.data.data.name;
+
+      // Submit the Stock Entry
+      await erpnextAPI.put(`/Stock Entry/${steName}`, { docstatus: 1 });
+      console.log(`📦 Material Transfer Stock Entry ${steName} submitted for Work Order ${woId}`);
+      return steName;
+    } catch (err) {
+      const errStr = JSON.stringify(err.response ? err.response.data : err.message);
+      console.warn(`Attempt ${attempt + 1} Material Transfer error for WO ${woId}:`, errStr.slice(0, 300));
+
+      // Check if insufficient stock for a specific item
+      const match = errStr.match(/For the item <strong>(.*?)<\/strong>/i) || errStr.match(/Item (.*?):/i);
+      if (match && match[1] && attempt < 2) {
+        const missingItem = match[1].trim();
+        console.log(`Auto-replenishing shortage item: "${missingItem}"`);
+        await autoReplenishStock(missingItem);
+        await cleanDraftStockEntries(woId);
+        continue;
+      }
+
+      // Check if duplicate entry error
+      if (errStr.includes('DuplicateEntryForWorkOrderError') && attempt < 2) {
+        await cleanDraftStockEntries(woId);
+        continue;
+      }
+
+      // Check if already transferred
+      if (errStr.includes('already transferred') || errStr.includes('No items to transfer')) {
+        return 'ALREADY_TRANSFERRED';
+      }
+
+      break;
+    }
+  }
+  return null;
+};
+
+// Helper: Complete Job Cards and Perform Manufacture Stock Entry in ERPNext (with self-healing)
+const performManufactureEntry = async (woId, qty, elapsedSeconds) => {
+  await cleanDraftStockEntries(woId);
+
+  // Step 1: Complete any pending Job Cards
+  try {
+    const jcList = await erpnextAPI.get('/Job Card', {
+      params: {
+        fields: JSON.stringify(['name', 'for_quantity', 'docstatus']),
+        filters: JSON.stringify([['work_order', '=', woId], ['docstatus', '!=', 2]])
+      }
+    });
+
+    const pad = n => String(n).padStart(2, '0');
+    const d = new Date();
+    const nowStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    const durationMins = Math.max(1, Math.ceil((elapsedSeconds || 900) / 60));
+
+    for (const jc of (jcList.data.data || [])) {
+      if (jc.docstatus === 0) {
+        await erpnextAPI.put(`/Job Card/${jc.name}`, {
+          docstatus: 1,
+          time_logs: [
+            {
+              from_time: nowStr,
+              to_time: nowStr,
+              time_in_mins: durationMins,
+              completed_qty: jc.for_quantity || qty || 1
+            }
+          ]
+        });
+        console.log(`✓ Completed Job Card ${jc.name} for WO ${woId}`);
+      }
+    }
+  } catch (jcErr) {
+    console.warn(`Job card auto-completion warning for WO ${woId}:`, jcErr.message);
+  }
+
+  // Step 2: Make and Submit Manufacture Stock Entry
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const prep = await erpnextMethodAPI.post('/erpnext.manufacturing.doctype.work_order.work_order.make_stock_entry', {
+        work_order_id: woId,
+        purpose: 'Manufacture',
+        qty: qty || undefined
+      });
+      const steDoc = prep.data.message;
+      if (!steDoc || !Array.isArray(steDoc.items) || steDoc.items.length === 0) {
+        console.log(`No manufacture items generated for Work Order ${woId} (possibly already manufactured)`);
+        return 'ALREADY_MANUFACTURED';
+      }
+
+      steDoc.items.forEach(item => {
+        item.allow_zero_valuation_rate = 1;
+        if (!item.basic_rate || item.basic_rate === 0) item.basic_rate = 1;
+      });
+
+      const createResp = await erpnextAPI.post('/Stock Entry', steDoc);
+      const steName = createResp.data.data.name;
+
+      // Submit the Stock Entry
+      await erpnextAPI.put(`/Stock Entry/${steName}`, { docstatus: 1 });
+      console.log(`🏭 Manufacture Stock Entry ${steName} submitted for Work Order ${woId}`);
+      return steName;
+    } catch (err) {
+      const errStr = JSON.stringify(err.response ? err.response.data : err.message);
+      console.warn(`Attempt ${attempt + 1} Manufacture Stock Entry error for WO ${woId}:`, errStr.slice(0, 300));
+
+      // Check duplicate entry
+      if (errStr.includes('DuplicateEntryForWorkOrderError') && attempt < 2) {
+        await cleanDraftStockEntries(woId);
+        continue;
+      }
+
+      // Check if raw materials shortage
+      const match = errStr.match(/For the item <strong>(.*?)<\/strong>/i) || errStr.match(/Item (.*?):/i);
+      if (match && match[1] && attempt < 2) {
+        const missingItem = match[1].trim();
+        console.log(`Auto-replenishing shortage item for manufacture: "${missingItem}"`);
+        await autoReplenishStock(missingItem);
+        await cleanDraftStockEntries(woId);
+        continue;
+      }
+
+      if (errStr.includes('already manufactured') || errStr.includes('Completed')) {
+        return 'ALREADY_MANUFACTURED';
+      }
+
+      break;
+    }
+  }
+  return null;
+};
+
+// Start Work Order Timer & Transfer RM to WIP
+app.post('/api/work-orders/:id/start', async (req, res) => {
+  const woId = req.params.id;
+  try {
+    const now = Date.now();
+    const nowIso = new Date().toISOString();
+    let woQty = 0;
+
+    // Check if WO is Draft in ERPNext and submit it
+    try {
+      const woResp = await erpnextAPI.get(`/Work Order/${woId}`);
+      const woData = woResp.data.data;
+      if (woData) {
+        woQty = woData.qty || woData.for_quantity || 0;
+        if (woData.docstatus === 0) {
+          // Submit the Draft Work Order
+          await erpnextAPI.put(`/Work Order/${woId}`, { docstatus: 1 });
+          console.log(`Submitted Draft Work Order ${woId} upon timer start`);
+        }
+        // Update actual start date if not set
+        if (!woData.actual_start_date) {
+          const pad = n => String(n).padStart(2, '0');
+          const d = new Date();
+          const startStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+          await erpnextAPI.put(`/Work Order/${woId}`, { actual_start_date: startStr });
+        }
+      }
+    } catch (e) {
+      console.warn(`Could not update ERPNext for WO ${woId} start:`, e.message);
+    }
+
+    // Transfer Raw Materials from Stores to WIP Warehouse in ERPNext
+    const transferEntry = await performMaterialTransfer(woId, woQty);
+
+    // Update batch groups status in memory & json if belongs to batch group
+    try {
+      const groups = loadBatchGroups();
+      let updatedGroup = false;
+      Object.values(groups).forEach(g => {
+        (g.subWOs || []).forEach(sub => {
+          if (sub.name === woId) {
+            sub.status = 'In Process';
+            updatedGroup = true;
+          }
+        });
+      });
+      if (updatedGroup) saveBatchGroups(groups);
+    } catch (bgErr) {
+      console.warn('Batch group status update warning:', bgErr.message);
+    }
+
+    const timers = loadTimers();
+    const existing = timers[woId] || { elapsedSeconds: 0 };
+
+    timers[woId] = {
+      id: woId,
+      status: 'running',
+      startTime: existing.startTime || nowIso,
+      lastIntervalStart: now,
+      elapsedSeconds: existing.elapsedSeconds || 0,
+      intervals: existing.intervals || [],
+      transferStockEntry: transferEntry || existing.transferStockEntry || null
+    };
+
+    saveTimers(timers);
+    console.log(`⏱ Started timer for Work Order ${woId} (Transfer: ${transferEntry || 'None'})`);
+
+    res.json({
+      success: true,
+      timer: timers[woId],
+      transferStockEntry: transferEntry,
+      message: `Work Order ${woId} started. Raw materials transferred to WIP.`
+    });
+  } catch (error) {
+    console.error('Error starting WO timer:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Pause Work Order Timer
+app.post('/api/work-orders/:id/pause', (req, res) => {
+  const woId = req.params.id;
+  try {
+    const now = Date.now();
+    const timers = loadTimers();
+    const timer = timers[woId];
+
+    if (!timer) {
+      return res.status(404).json({ success: false, error: `No timer found for Work Order ${woId}` });
+    }
+
+    if (timer.status === 'running' && timer.lastIntervalStart) {
+      const added = Math.max(0, Math.floor((now - timer.lastIntervalStart) / 1000));
+      timer.elapsedSeconds = (timer.elapsedSeconds || 0) + added;
+      if (!Array.isArray(timer.intervals)) timer.intervals = [];
+      timer.intervals.push({ start: timer.lastIntervalStart, end: now, duration: added });
+    }
+
+    timer.status = 'paused';
+    timer.lastIntervalStart = null;
+    timer.pausedAt = new Date().toISOString();
+
+    saveTimers(timers);
+    console.log(`⏸ Paused timer for Work Order ${woId} (Total elapsed: ${timer.elapsedSeconds}s)`);
+
+    res.json({ success: true, timer, message: `Work Order ${woId} paused` });
+  } catch (error) {
+    console.error('Error pausing WO timer:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Resume Work Order Timer
+app.post('/api/work-orders/:id/resume', (req, res) => {
+  const woId = req.params.id;
+  try {
+    const now = Date.now();
+    const timers = loadTimers();
+    const timer = timers[woId];
+
+    if (!timer) {
+      return res.status(404).json({ success: false, error: `No timer found for Work Order ${woId}` });
+    }
+
+    timer.status = 'running';
+    timer.lastIntervalStart = now;
+    timer.resumedAt = new Date().toISOString();
+
+    saveTimers(timers);
+    console.log(`▶ Resumed timer for Work Order ${woId}`);
+
+    res.json({ success: true, timer, message: `Work Order ${woId} resumed` });
+  } catch (error) {
+    console.error('Error resuming WO timer:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Finish / Complete Work Order Timer & Manufacture Finished Goods
+app.post('/api/work-orders/:id/finish', async (req, res) => {
+  const woId = req.params.id;
+  try {
+    const now = Date.now();
+    const nowIso = new Date().toISOString();
+    const timers = loadTimers();
+    const timer = timers[woId] || { elapsedSeconds: 0 };
+    let woQty = 0;
+
+    if (timer.status === 'running' && timer.lastIntervalStart) {
+      const added = Math.max(0, Math.floor((now - timer.lastIntervalStart) / 1000));
+      timer.elapsedSeconds = (timer.elapsedSeconds || 0) + added;
+      if (!Array.isArray(timer.intervals)) timer.intervals = [];
+      timer.intervals.push({ start: timer.lastIntervalStart, end: now, duration: added });
+    }
+
+    timer.status = 'completed';
+    timer.lastIntervalStart = null;
+    timer.finishedAt = nowIso;
+
+    // Fetch Work Order qty
+    try {
+      const woResp = await erpnextAPI.get(`/Work Order/${woId}`);
+      if (woResp.data.data) {
+        woQty = woResp.data.data.qty || woResp.data.data.for_quantity || 0;
+      }
+    } catch (e) {
+      console.warn(`Could not fetch WO qty for ${woId}:`, e.message);
+    }
+
+    // Manufacture in ERPNext: consumes WIP, produces Finished Good into FG Warehouse
+    const manufactureEntry = await performManufactureEntry(woId, woQty, timer.elapsedSeconds);
+    timer.manufactureStockEntry = manufactureEntry || null;
+    saveTimers(timers);
+
+    // Update actual end date and Completed status in ERPNext
+    try {
+      const pad = n => String(n).padStart(2, '0');
+      const d = new Date();
+      const endStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      await erpnextAPI.put(`/Work Order/${woId}`, { actual_end_date: endStr, status: 'Completed', produced_qty: woQty || undefined });
+      console.log(`Updated Work Order ${woId} as Completed in ERPNext`);
+    } catch (erpErr) {
+      console.warn(`Could not update ERPNext completion for ${woId}:`, erpErr.message);
+    }
+
+    // Update batch groups status in memory & json if belongs to batch group
+    try {
+      const groups = loadBatchGroups();
+      let updatedGroup = false;
+      Object.values(groups).forEach(g => {
+        (g.subWOs || []).forEach(sub => {
+          if (sub.name === woId) {
+            sub.status = 'Completed';
+            updatedGroup = true;
+          }
+        });
+      });
+      if (updatedGroup) saveBatchGroups(groups);
+    } catch (bgErr) {
+      console.warn('Batch group status update warning:', bgErr.message);
+    }
+
+    console.log(`⏹ Finished timer for Work Order ${woId} (Manufacture: ${manufactureEntry || 'None'})`);
+
+    res.json({
+      success: true,
+      timer,
+      manufactureStockEntry: manufactureEntry,
+      message: `Work Order ${woId} finished. Finished goods manufactured into inventory.`
+    });
+  } catch (error) {
+    console.error('Error finishing WO timer:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== BATCH WORK ORDER ENDPOINTS ====================
+
+// Create a Batch Work Order Group (1 master + N sub Work Orders)
+app.post('/api/batch-work-orders', async (req, res) => {
+  try {
+    const {
+      production_item,
+      bom_no,
+      qty,
+      batch_count,
+      planned_start_date,
+      planned_end_date,
+      planned_start_time,
+      planned_end_time,
+      workstation,
+      company,
+      wip_warehouse,
+      fg_warehouse,
+      sales_order,
+      description
+    } = req.body;
+
+    if (!production_item || !bom_no || !qty || !batch_count || !planned_start_date) {
+      return res.status(400).json({
+        success: false,
+        error: 'production_item, bom_no, qty, batch_count, and planned_start_date are required'
+      });
+    }
+
+    const numBatches = parseInt(batch_count, 10);
+    if (isNaN(numBatches) || numBatches < 1 || numBatches > 50) {
+      return res.status(400).json({
+        success: false,
+        error: 'batch_count must be between 1 and 50'
+      });
+    }
+
+    const batchGroupId = generateBatchGroupId();
+    console.log(`\n=== Creating Batch Group ${batchGroupId}: ${numBatches} batches of ${production_item} (${qty} each) ===`);
+
+    // Helper to build start/end datetime strings
+    const startTime = planned_start_time || '08:00';
+    const endTime = planned_end_time || '17:00';
+    const startDateStr = planned_start_date.includes(' ') ? planned_start_date : `${planned_start_date} ${startTime.length === 5 ? startTime + ':00' : startTime}`;
+    const endDate = planned_end_date || planned_start_date;
+    const endDateStr = endDate.includes(' ') ? endDate : `${endDate} ${endTime.length === 5 ? endTime + ':00' : endTime}`;
+
+    // Helper: create a single WO via internal POST logic
+    const createSingleWO = async (descriptionTag, batchLabel) => {
+      const fullDesc = [descriptionTag, description].filter(Boolean).join('\n');
+      const internalReq = {
+        body: {
+          production_item,
+          bom_no,
+          qty: Number(qty),
+          planned_start_date: startDateStr,
+          planned_end_date: endDateStr,
+          company: company || 'SHRDC Demo',
+          wip_warehouse: wip_warehouse || 'Work In Progress - SD',
+          fg_warehouse: fg_warehouse || 'Finished Goods - SD',
+          workstation: workstation,
+          sales_order: sales_order,
+          description: fullDesc
+        }
+      };
+
+      // Re-use the existing work order creation logic directly via API call
+      const resp = await axios.post(`http://localhost:${PORT}/api/work-orders`, internalReq.body);
+      return resp.data;
+    };
+
+    // Create N sub Work Orders (Master is virtual holder)
+    const subWOs = [];
+    const failedBatches = [];
+    for (let i = 1; i <= numBatches; i++) {
+      const subDesc = `[BATCH-GROUP: ${batchGroupId} | Batch ${i}/${numBatches}]`;
+      try {
+        const subResult = await createSingleWO(subDesc, `Batch ${i}/${numBatches}`);
+        if (subResult.success) {
+          subWOs.push({
+            name: subResult.data.name,
+            batchNumber: i,
+            status: subResult.data.status || 'Draft'
+          });
+          console.log(`  Sub WO ${i}/${numBatches} created: ${subResult.data.name}`);
+        } else {
+          failedBatches.push({ batchNumber: i, error: subResult.error });
+          console.error(`  Sub WO ${i}/${numBatches} FAILED:`, subResult.error);
+        }
+      } catch (err) {
+        failedBatches.push({ batchNumber: i, error: err.response?.data?.error || err.message });
+        console.error(`  Sub WO ${i}/${numBatches} FAILED:`, err.message);
+      }
+    }
+
+    // Save batch group to JSON store
+    const groups = loadBatchGroups();
+    groups[batchGroupId] = {
+      id: batchGroupId,
+      masterWO: null,
+      isVirtualMaster: true,
+      subWOs: subWOs,
+      batchCount: numBatches,
+      productionItem: production_item,
+      bomNo: bom_no,
+      qtyPerBatch: Number(qty),
+      totalQty: Number(qty) * numBatches,
+      plannedDate: planned_start_date,
+      workstation: workstation || 'Unassigned',
+      createdAt: new Date().toISOString(),
+      failedBatches: failedBatches
+    };
+    saveBatchGroups(groups);
+
+    console.log(`=== Batch Group ${batchGroupId} complete: ${subWOs.length}/${numBatches} sub-WOs created ===\n`);
+
+    res.json({
+      success: true,
+      message: `Batch Group ${batchGroupId} created with ${subWOs.length} Sub-Work-Orders`,
+      data: {
+        batchGroupId,
+        masterWO: null,
+        isVirtualMaster: true,
+        subWOs,
+        failedBatches,
+        totalCreated: subWOs.length
+      }
+    });
+  } catch (error) {
+    console.error('Batch Work Order creation error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Reschedule an entire Batch Work Order Group (updates all sub WOs together)
+app.put('/api/batch-work-orders/:id/reschedule', async (req, res) => {
+  try {
+    const { planned_start_date, planned_end_date, workstation } = req.body;
+    const groupId = req.params.id;
+
+    const groups = loadBatchGroups();
+    const group = groups[groupId];
+    if (!group) {
+      return res.status(404).json({ success: false, error: `Batch group ${groupId} not found` });
+    }
+
+    const startDateStr = planned_start_date.includes(' ') ? planned_start_date : `${planned_start_date} 08:00:00`;
+    const endDateStr = (planned_end_date || planned_start_date).includes(' ')
+      ? (planned_end_date || planned_start_date)
+      : `${planned_end_date || planned_start_date} 17:00:00`;
+
+    // Update group storage metadata
+    group.plannedDate = planned_start_date.split(' ')[0];
+    if (workstation && workstation !== 'Unassigned') {
+      group.workstation = workstation;
+    }
+    saveBatchGroups(groups);
+
+    // Reschedule all sub Work Orders linked to this batch group
+    const updatedWOs = [];
+    const errors = [];
+    for (const sub of group.subWOs || []) {
+      try {
+        await syncRescheduleWorkOrder(sub.name, startDateStr, endDateStr, workstation);
+        updatedWOs.push(sub.name);
+      } catch (err) {
+        console.warn(`Could not reschedule sub WO ${sub.name} in batch group ${groupId}:`, err.message);
+        errors.push({ name: sub.name, error: err.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Batch Group ${groupId} (${updatedWOs.length}/${group.subWOs.length} Work Orders) rescheduled to ${group.plannedDate}`,
+      data: {
+        batchGroupId: groupId,
+        updatedWOs,
+        errors,
+        plannedDate: group.plannedDate,
+        workstation: group.workstation
+      }
+    });
+  } catch (error) {
+    console.error('Batch reschedule error:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// List all Batch Work Order Groups
+app.get('/api/batch-work-orders', async (req, res) => {
+  try {
+    const groups = loadBatchGroups();
+    const groupList = Object.values(groups).sort((a, b) =>
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
+    // Enrich with live statuses from ERPNext
+    for (const group of groupList) {
+      if (group.masterWO) {
+        try {
+          const masterResp = await erpnextAPI.get(`/Work Order/${group.masterWO}`);
+          group.masterStatus = masterResp.data.data.status;
+        } catch (e) {
+          group.masterStatus = 'Unknown';
+        }
+      } else {
+        group.masterStatus = 'Virtual Holder';
+      }
+
+      // Fetch sub WO statuses
+      let completedCount = 0;
+      let inProcessCount = 0;
+      for (const sub of group.subWOs || []) {
+        try {
+          const subResp = await erpnextAPI.get(`/Work Order/${sub.name}`);
+          sub.status = subResp.data.data.status;
+          if (sub.status === 'Completed') completedCount++;
+          else if (sub.status === 'In Process') inProcessCount++;
+        } catch (e) {
+          sub.status = 'Unknown';
+        }
+      }
+
+      group.progress = {
+        total: (group.subWOs || []).length,
+        completed: completedCount,
+        inProcess: inProcessCount,
+        percentage: (group.subWOs || []).length > 0
+          ? Math.round((completedCount / group.subWOs.length) * 100)
+          : 0
+      };
+    }
+
+    res.json({ success: true, groups: groupList });
+  } catch (error) {
+    console.error('Error listing batch groups:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get a single Batch Work Order Group
+app.get('/api/batch-work-orders/:id', async (req, res) => {
+  try {
+    const groups = loadBatchGroups();
+    const group = groups[req.params.id];
+    if (!group) {
+      return res.status(404).json({ success: false, error: `Batch group ${req.params.id} not found` });
+    }
+
+    // Enrich with live data
+    try {
+      const masterResp = await erpnextAPI.get(`/Work Order/${group.masterWO}`);
+      group.masterStatus = masterResp.data.data.status;
+      group.masterData = masterResp.data.data;
+    } catch (e) {
+      group.masterStatus = 'Unknown';
+    }
+
+    for (const sub of group.subWOs) {
+      try {
+        const subResp = await erpnextAPI.get(`/Work Order/${sub.name}`);
+        sub.status = subResp.data.data.status;
+        sub.data = subResp.data.data;
+      } catch (e) {
+        sub.status = 'Unknown';
+      }
+    }
+
+    const completedCount = group.subWOs.filter(s => s.status === 'Completed').length;
+    group.progress = {
+      total: group.subWOs.length,
+      completed: completedCount,
+      percentage: group.subWOs.length > 0
+        ? Math.round((completedCount / group.subWOs.length) * 100)
+        : 0
+    };
+
+    res.json({ success: true, group });
+  } catch (error) {
+    console.error('Error fetching batch group:', error.message);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -717,10 +1533,49 @@ app.get('/api/schedule', async (req, res) => {
       return wo;
     });
 
+    // Enrich Work Orders with batch group metadata
+    const batchGroups = loadBatchGroups();
+    const woToBatchMap = {};
+    Object.values(batchGroups).forEach(group => {
+      // Mark master WO
+      woToBatchMap[group.masterWO] = {
+        batchGroupId: group.id,
+        role: 'master',
+        batchNumber: 0,
+        batchCount: group.batchCount,
+        productionItem: group.productionItem,
+        qtyPerBatch: group.qtyPerBatch,
+        totalQty: group.totalQty
+      };
+      // Mark sub WOs
+      (group.subWOs || []).forEach(sub => {
+        woToBatchMap[sub.name] = {
+          batchGroupId: group.id,
+          role: 'sub',
+          batchNumber: sub.batchNumber,
+          batchCount: group.batchCount,
+          masterWO: group.masterWO,
+          productionItem: group.productionItem,
+          qtyPerBatch: group.qtyPerBatch,
+          totalQty: group.totalQty
+        };
+      });
+    });
+
+    const enrichedWorkOrders = workOrdersWithStation.map(wo => {
+      const batchInfo = woToBatchMap[wo.name];
+      if (batchInfo) {
+        return { ...wo, _batchGroup: batchInfo };
+      }
+      return wo;
+    });
+
     res.json({
       workstations: workstations,
       jobCards: jobCardsDetails.filter(Boolean),
-      workOrders: workOrdersWithStation
+      workOrders: enrichedWorkOrders,
+      batchGroups: Object.values(batchGroups),
+      timers: loadTimers()
     });
   } catch (error) {
     console.error('Error fetching schedule:', error.response ? error.response.data : error.message);

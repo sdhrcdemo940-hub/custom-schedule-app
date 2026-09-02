@@ -2034,4 +2034,775 @@ body {
   font-size: 9px;
 }
 
+/* ================= BATCH WORK ORDER STYLES ================= */
+
+.btn-batch-panel {
+  background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+  color: #f8fafc;
+  border: 1px solid #475569;
+}
+
+.btn-batch-panel:hover, .btn-batch-panel.active {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: #ffffff;
+  border-color: #3b82f6;
+  box-shadow: 0 0 10px rgba(37, 99, 235, 0.4);
+}
+
+.prod-batch-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background-color: #0f172a;
+  color: #f8fafc;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid #3b82f6;
+  margin-bottom: 3px;
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.batch-badge-text {
+  letter-spacing: 0.2px;
+}
+
+.card-batch-member {
+  border-left-width: 4px !important;
+}
+
+/* Batch Panel Drawer */
+.batch-panel-drawer {
+  position: fixed;
+  top: 60px;
+  right: 0;
+  width: 380px;
+  max-width: 90vw;
+  height: calc(100vh - 60px);
+  background: #0f172a;
+  color: #f8fafc;
+  border-left: 2px solid #334155;
+  box-shadow: -5px 0 25px rgba(0, 0, 0, 0.5);
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  animation: slideInRight 0.25s ease-out;
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.batch-panel-header {
+  padding: 16px;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.batch-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.batch-panel-title h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.batch-panel-title p {
+  margin: 2px 0 0 0;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.batch-panel-icon {
+  font-size: 22px;
+}
+
+.batch-panel-close {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.batch-panel-close:hover {
+  color: #ffffff;
+  background: #334155;
+}
+
+.batch-panel-body {
+  padding: 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.batch-panel-empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.batch-groups-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.batch-group-card {
+  background: #1e293b;
+  border-radius: 8px;
+  border: 1px solid #334155;
+  border-left-width: 5px;
+  overflow: hidden;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.batch-group-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.batch-group-summary {
+  padding: 12px 14px;
+  cursor: pointer;
+}
+
+.batch-group-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.batch-group-id {
+  font-family: monospace;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.batch-group-date {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.batch-group-item {
+  font-size: 13px;
+  color: #e2e8f0;
+  margin-bottom: 4px;
+}
+
+.batch-group-master {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 10px;
+}
+
+.clickable-link {
+  color: #60a5fa;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.clickable-link:hover {
+  color: #93c5fd;
+}
+
+.batch-progress-container {
+  margin-bottom: 8px;
+}
+
+.batch-progress-bar {
+  height: 6px;
+  background: #334155;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.batch-progress-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+  border-radius: 3px;
+}
+
+.batch-progress-text {
+  font-size: 10.5px;
+  color: #cbd5e1;
+  font-weight: 600;
+}
+
+.batch-group-expand-hint {
+  font-size: 11px;
+  color: #38bdf8;
+  font-weight: 600;
+  margin-top: 6px;
+  text-align: right;
+}
+
+.batch-sub-list {
+  background: #0f172a;
+  border-top: 1px solid #334155;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.batch-sub-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 5px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.batch-sub-item:hover {
+  background: #2563eb22;
+  border-color: #3b82f6;
+}
+
+.batch-sub-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.batch-sub-badge {
+  background: #334155;
+  color: #38bdf8;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+
+.batch-sub-wo {
+  font-family: monospace;
+  font-weight: 700;
+  color: #f1f5f9;
+}
+
+.batch-sub-status {
+  padding: 2px 6px;
+  border-radius: 3px;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 9.5px;
+}
+
+/* ================= MATRIX CELL BATCH CARD STYLES (PROFESSIONAL SLICK DESIGN) ================= */
+
+.matrix-batch-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #2563eb;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+  font-size: 11px;
+  color: #0f172a;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  user-select: none;
+  overflow: visible;
+}
+
+.matrix-batch-card:hover {
+  transform: translateY(-1.5px);
+  box-shadow: 0 6px 16px -2px rgba(15, 23, 42, 0.1), 0 2px 4px -1px rgba(15, 23, 42, 0.06);
+  border-color: #cbd5e1;
+  z-index: 10;
+}
+
+.matrix-batch-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+
+.batch-pill-badge {
+  color: #ffffff;
+  font-family: monospace;
+  font-weight: 800;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  display: inline-block;
+  flex-shrink: 0;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.matrix-batch-date {
+  font-size: 9px;
+  color: #94a3b8;
+  font-weight: 600;
+  letter-spacing: -0.1px;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
+.matrix-batch-main-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+
+.matrix-batch-item-name {
+  font-size: 11px;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.matrix-batch-qty-tag {
+  font-size: 9px;
+  font-weight: 800;
+  color: #0284c7;
+  background-color: #f0f9ff;
+  border: 1px solid #bae6fd;
+  padding: 0 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.matrix-batch-meta-sub {
+  font-size: 10px;
+  color: #64748b;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+/* Scheduled Time Row */
+.matrix-batch-time {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #64748b;
+  margin-bottom: 2px;
+  letter-spacing: -0.1px;
+}
+
+/* Slim Progress Bar */
+.matrix-batch-card .batch-progress-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.matrix-batch-card .batch-progress-bar {
+  height: 4px;
+  background: #f1f5f9;
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  flex: 1;
+}
+
+.matrix-batch-card .batch-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.matrix-batch-card .batch-progress-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: #64748b;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Collapsible Sub Orders Dropdown */
+.matrix-batch-details {
+  border-top: 1px solid #f1f5f9;
+  padding-top: 3px;
+  position: relative;
+}
+
+.matrix-batch-summary {
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  color: #2563eb;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1px 0;
+  transition: color 0.15s ease;
+}
+
+.matrix-batch-summary::-webkit-details-marker {
+  display: none;
+}
+
+.matrix-batch-summary:hover {
+  color: #1d4ed8;
+}
+
+.matrix-batch-caret {
+  font-size: 10px;
+  transition: transform 0.2s ease;
+}
+
+.matrix-batch-details[open] .matrix-batch-caret {
+  transform: rotate(180deg);
+}
+
+/* Floating dropdown overlay — does NOT expand the calendar cell */
+.matrix-batch-sub-list {
+  position: absolute;
+  top: 100%;
+  left: -8px;
+  right: -8px;
+  min-width: 240px;
+  max-height: 280px;
+  overflow-y: auto;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 2px;
+  background: #ffffff;
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 10px 25px -3px rgba(15, 23, 42, 0.18), 0 4px 6px -2px rgba(15, 23, 42, 0.08);
+}
+
+.matrix-batch-sub-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 6px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.matrix-batch-sub-item:hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  transform: translateX(1px);
+}
+
+.matrix-sub-badge {
+  background: #f1f5f9;
+  color: #475569;
+  font-weight: 700;
+  font-family: monospace;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  border: 1px solid #e2e8f0;
+}
+
+.matrix-sub-wo {
+  font-family: monospace;
+  font-weight: 700;
+  color: #1e293b;
+  font-size: 9.5px;
+}
+
+.matrix-sub-status {
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 8.5px;
+  text-transform: capitalize;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* ================= LIVE WORK ORDER PRODUCTION TIMER STYLES ================= */
+
+.wo-timer-bar {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px dashed #e2e8f0;
+}
+
+.wo-timer-idle {
+  display: flex;
+}
+
+.wo-timer-running, .wo-timer-paused {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 5px;
+  padding: 3px 6px;
+}
+
+.wo-timer-running {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.wo-timer-paused {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.timer-clock {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.timer-digits {
+  font-family: 'SF Mono', Consolas, Menlo, Monaco, monospace;
+  font-size: 11px;
+  font-weight: 800;
+  color: #166534;
+  letter-spacing: 0.5px;
+}
+
+.timer-clock.paused .timer-digits {
+  color: #92400e;
+}
+
+.timer-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #22c55e;
+  box-shadow: 0 0 6px #22c55e;
+  animation: timerPulse 1.2s infinite ease-in-out;
+}
+
+.timer-paused-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #f59e0b;
+}
+
+@keyframes timerPulse {
+  0% { transform: scale(0.9); opacity: 0.8; }
+  50% { transform: scale(1.3); opacity: 1; }
+  100% { transform: scale(0.9); opacity: 0.8; }
+}
+
+.timer-pulse-dot-sm {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background-color: #22c55e;
+  box-shadow: 0 0 4px #22c55e;
+  animation: timerPulse 1.2s infinite ease-in-out;
+  display: inline-block;
+}
+
+.timer-paused-dot-sm {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background-color: #f59e0b;
+  display: inline-block;
+}
+
+.timer-btn-group {
+  display: flex;
+  gap: 3px;
+}
+
+.timer-btn {
+  border: none;
+  border-radius: 4px;
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.timer-btn.btn-start {
+  width: 100%;
+  justify-content: center;
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: #ffffff;
+  padding: 4px 10px;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2);
+}
+
+.timer-btn.btn-start:hover {
+  background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+  transform: translateY(-0.5px);
+  box-shadow: 0 2px 4px rgba(37, 99, 235, 0.3);
+}
+
+.timer-btn.btn-pause {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
+.timer-btn.btn-pause:hover {
+  background: #fde68a;
+}
+
+.timer-btn.btn-resume {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+
+.timer-btn.btn-resume:hover {
+  background: #bbf7d0;
+}
+
+.timer-btn.btn-finish {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fca5a5;
+}
+
+.timer-btn.btn-finish:hover {
+  background: #fecaca;
+}
+
+.wo-timer-completed {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #16a34a;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.timer-done-icon {
+  font-weight: 900;
+}
+
+/* Sub-Item Mini Timers inside Batch Cards */
+.matrix-sub-timer-actions {
+  display: flex;
+  align-items: center;
+}
+
+.sub-timer-live {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+
+.sub-timer-live.paused {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.timer-digits-sm {
+  font-family: monospace;
+  font-size: 9.5px;
+  font-weight: 800;
+  color: #166534;
+}
+
+.sub-timer-live.paused .timer-digits-sm {
+  color: #92400e;
+}
+
+.sub-timer-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 9px;
+  border-radius: 2px;
+  transition: transform 0.1s ease;
+}
+
+.sub-timer-btn:hover {
+  transform: scale(1.2);
+}
+
+.sub-timer-btn.start {
+  background: #eff6ff;
+  color: #2563eb;
+  border: 1px solid #bfdbfe;
+  font-size: 8.5px;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.sub-timer-btn.start:hover {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.sub-timer-done {
+  font-size: 9px;
+  font-weight: 700;
+  color: #16a34a;
+}
+
+
+
+
+
 
