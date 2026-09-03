@@ -1555,8 +1555,25 @@ const Scheduler = () => {
                                     const bGroup = ev.extendedProps?.batchGroup;
                                     if (bGroup?.batchGroupId) {
                                       const gid = bGroup.batchGroupId;
-                                      if (!batchGroupsInCell[gid]) batchGroupsInCell[gid] = [];
-                                      batchGroupsInCell[gid].push(ev);
+                                      if (!batchGroupsInCell[gid]) {
+                                        // Find all events belonging to this batch group across matrixEvents
+                                        const allGroupEvs = matrixEvents.filter(e => e.extendedProps?.batchGroup?.batchGroupId === gid);
+                                        const master = allGroupEvs.find(e => e.extendedProps?.batchGroup?.role === 'master') || allGroupEvs[0];
+
+                                        if (master) {
+                                          const mStart = master.start instanceof Date ? master.start : new Date(master.start);
+                                          const mWs = (master.extendedProps?.workstation || 'Unassigned').trim();
+                                          const isSameDay = !isNaN(mStart.getTime()) &&
+                                            mStart.getFullYear() === day.getFullYear() &&
+                                            mStart.getMonth() === day.getMonth() &&
+                                            mStart.getDate() === day.getDate();
+
+                                          // Only anchor the batch group card in its primary date & workstation cell
+                                          if (isSameDay && mWs === stationName) {
+                                            batchGroupsInCell[gid] = allGroupEvs;
+                                          }
+                                        }
+                                      }
                                     } else {
                                       standaloneEvents.push(ev);
                                     }
@@ -1668,17 +1685,23 @@ const Scheduler = () => {
                                                       onClick={(e) => { e.stopPropagation(); openDoc('workorder', sub.name); }}
                                                       title={`Click to open ${sub.name} in ERPNext`}
                                                     >
-                                                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                        <span className="matrix-sub-badge">#{sub.batchNumber}</span>
-                                                        <span className="matrix-sub-wo">{sub.name}</span>
-                                                      </div>
+                                                      <div className="sub-item-status-dot" style={{ backgroundColor: getStatusColorWO(sub.status) }}></div>
+                                                      <div className="sub-item-info">
+                                                        <div className="sub-item-top-row">
+                                                          <div className="sub-item-name-group">
+                                                            <span className="matrix-sub-badge">#{sub.batchNumber}</span>
+                                                            <span className="matrix-sub-wo">{sub.name}</span>
+                                                          </div>
+                                                          <div className="sub-item-status-tag" style={{ color: getStatusColorWO(sub.status) }}>
+                                                            ● <span className="sub-status-text">{sub.status || 'Draft'}</span>
+                                                          </div>
+                                                        </div>
 
-                                                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                        {/* Sub-item Timer Action Controls */}
-                                                        <div className="matrix-sub-timer-actions" onClick={(e) => e.stopPropagation()}>
+                                                        {/* Sub-item Timer & Details Row */}
+                                                        <div className="sub-item-bottom-row" onClick={(e) => e.stopPropagation()}>
                                                           {isCompleted ? (
                                                             <span className="sub-timer-done" title={`Total production time: ${formatTimerDuration(totalSecs)}`}>
-                                                              ✓ {formatTimerDuration(totalSecs)}
+                                                              ✓ Completed {totalSecs > 0 ? `(${formatTimerDuration(totalSecs)})` : ''}
                                                             </span>
                                                           ) : timerStatus === 'running' ? (
                                                             <div className="sub-timer-live">
@@ -1700,10 +1723,6 @@ const Scheduler = () => {
                                                             </button>
                                                           )}
                                                         </div>
-
-                                                        <span className="matrix-sub-status" style={{ backgroundColor: getStatusColorWO(sub.status) }}>
-                                                          {sub.status || 'Draft'}
-                                                        </span>
                                                       </div>
                                                     </div>
                                                   );

@@ -1109,9 +1109,20 @@ app.put('/api/batch-work-orders/:id/reschedule', async (req, res) => {
     }
     saveBatchGroups(groups);
 
-    // Reschedule all sub Work Orders linked to this batch group
+    // Reschedule master Work Order if it exists
     const updatedWOs = [];
     const errors = [];
+    if (group.masterWO) {
+      try {
+        await syncRescheduleWorkOrder(group.masterWO, startDateStr, endDateStr, workstation);
+        updatedWOs.push(group.masterWO);
+      } catch (err) {
+        console.warn(`Could not reschedule master WO ${group.masterWO} in batch group ${groupId}:`, err.message);
+        errors.push({ name: group.masterWO, error: err.message });
+      }
+    }
+
+    // Reschedule all sub Work Orders linked to this batch group
     for (const sub of group.subWOs || []) {
       try {
         await syncRescheduleWorkOrder(sub.name, startDateStr, endDateStr, workstation);

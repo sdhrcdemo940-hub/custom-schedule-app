@@ -253,5 +253,73 @@
     "resumedAt": "2026-09-02T08:59:23.489Z",
     "finishedAt": "2026-09-02T08:59:26.164Z",
     "manufactureStockEntry": "MAT-STE-2026-00079"
+  },
+  "MFG-WO-2026-00091": {
+    "id": "MFG-WO-2026-00091",
+    "status": "completed",
+    "startTime": "2026-09-03T01:32:11.151Z",
+    "lastIntervalStart": null,
+    "elapsedSeconds": 10,
+    "intervals": [
+      {
+        "start": 1788399131151,
+        "end": 1788399142099,
+        "duration": 10
+      }
+    ],
+    "transferStockEntry": "MAT-STE-2026-00080",
+    "finishedAt": "2026-09-03T01:32:22.099Z",
+    "manufactureStockEntry": "MAT-STE-2026-00081"
+  },
+  "MFG-WO-2026-00095": {
+    "id": "MFG-WO-2026-00095",
+    "status": "paused",
+    "startTime": "2026-09-03T01:33:10.874Z",
+    "lastIntervalStart": null,
+    "elapsedSeconds": 5,
+    "intervals": [
+      {
+        "start": 1788399190874,
+        "end": 1788399194871,
+        "duration": 3
+      },
+      {
+        "start": 1788399200975,
+        "end": 1788399202383,
+        "duration": 1
+      },
+      {
+        "start": 1788399212514,
+        "end": 1788399214189,
+        "duration": 1
+      }
+    ],
+    "transferStockEntry": "MAT-STE-2026-00082",
+    "pausedAt": "2026-09-03T01:33:34.190Z",
+    "resumedAt": "2026-09-03T01:33:32.514Z"
+  },
+  "MFG-WO-2026-00075": {
+    "id": "MFG-WO-2026-00075",
+    "status": "completed",
+    "startTime": "2026-09-03T02:21:14.919Z",
+    "lastIntervalStart": null,
+    "elapsedSeconds": 12,
+    "intervals": [
+      {
+        "start": 1788402074919,
+        "end": 1788402085631,
+        "duration": 10
+      },
+      {
+        "start": 1788402087246,
+        "end": 1788402089451,
+        "duration": 2
+      }
+    ],
+    "transferStockEntry": "MAT-STE-2026-00083",
+    "pausedAt": "2026-09-03T02:21:25.632Z",
+    "resumedAt": "2026-09-03T02:21:27.247Z",
+    "finishedAt": "2026-09-03T02:21:29.451Z",
+    "manufactureStockEntry": "MAT-STE-2026-00084"
   }
 }
