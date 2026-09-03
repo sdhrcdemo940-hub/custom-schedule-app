@@ -321,5 +321,89 @@
     "resumedAt": "2026-09-03T02:21:27.247Z",
     "finishedAt": "2026-09-03T02:21:29.451Z",
     "manufactureStockEntry": "MAT-STE-2026-00084"
+  },
+  "MFG-WO-2026-00106": {
+    "id": "MFG-WO-2026-00106",
+    "status": "completed",
+    "startTime": "2026-09-03T03:22:28.378Z",
+    "lastIntervalStart": null,
+    "elapsedSeconds": 20236,
+    "intervals": [
+      {
+        "start": 1788405748378,
+        "end": 1788425984706,
+        "duration": 20236
+      }
+    ],
+    "transferStockEntry": "MAT-STE-2026-00085",
+    "finishedAt": "2026-09-03T08:59:44.706Z",
+    "manufactureStockEntry": null
+  },
+  "MFG-WO-2026-00071": {
+    "id": "MFG-WO-2026-00071",
+    "status": "completed",
+    "startTime": "2026-09-03T08:43:53.264Z",
+    "lastIntervalStart": null,
+    "elapsedSeconds": 7,
+    "intervals": [
+      {
+        "start": 1788425033264,
+        "end": 1788425040270,
+        "duration": 7
+      }
+    ],
+    "transferStockEntry": "MAT-STE-2026-00086",
+    "finishedAt": "2026-09-03T08:44:00.270Z",
+    "manufactureStockEntry": null
+  },
+  "MFG-WO-2026-00072": {
+    "id": "MFG-WO-2026-00072",
+    "status": "running",
+    "startTime": "2026-09-03T08:46:31.515Z",
+    "lastIntervalStart": 1788425191515,
+    "elapsedSeconds": 0,
+    "intervals": [],
+    "transferStockEntry": "MAT-STE-2026-00087"
+  },
+  "MFG-WO-2026-00107": {
+    "id": "MFG-WO-2026-00107",
+    "status": "completed",
+    "startTime": "2026-09-03T08:59:47.370Z",
+    "lastIntervalStart": null,
+    "elapsedSeconds": 384,
+    "intervals": [
+      {
+        "start": 1788425989804,
+        "end": 1788426374079,
+        "duration": 384
+      }
+    ],
+    "transferStockEntry": "MAT-STE-2026-00088",
+    "finishedAt": "2026-09-03T09:06:14.079Z",
+    "manufactureStockEntry": null
+  },
+  "MFG-WO-2026-00057": {
+    "id": "MFG-WO-2026-00057",
+    "status": "completed",
+    "startTime": "2026-09-03T09:07:42.624Z",
+    "lastIntervalStart": null,
+    "elapsedSeconds": 5,
+    "intervals": [
+      {
+        "start": 1788426462624,
+        "end": 1788426465838,
+        "duration": 3
+      },
+      {
+        "start": 1788426466675,
+        "end": 1788426469051,
+        "duration": 2
+      }
+    ],
+    "transferStockEntry": "ALREADY_TRANSFERRED",
+    "pausedAt": "2026-09-03T09:07:45.839Z",
+    "resumedAt": "2026-09-03T09:07:46.676Z",
+    "finishedAt": "2026-09-03T09:07:49.051Z",
+    "manufactureStockEntry": null
   }
 }

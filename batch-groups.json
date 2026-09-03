@@ -51,12 +51,12 @@
       {
         "name": "MFG-WO-2026-00071",
         "batchNumber": 1,
-        "status": "Draft"
+        "status": "Completed"
       },
       {
         "name": "MFG-WO-2026-00072",
         "batchNumber": 2,
-        "status": "Draft"
+        "status": "In Process"
       },
       {
         "name": "MFG-WO-2026-00073",
@@ -69,7 +69,7 @@
     "bomNo": "BOM-7317N-002",
     "qtyPerBatch": 440,
     "totalQty": 1320,
-    "plannedDate": "2026-09-04",
+    "plannedDate": "2026-09-03",
     "workstation": "PKN-202-PRESS",
     "createdAt": "2026-09-02T06:52:49.071Z",
     "failedBatches": []
@@ -370,6 +370,32 @@
     "plannedDate": "2026-09-02",
     "workstation": "PPS-301-PACKING",
     "createdAt": "2026-09-03T01:31:28.274Z",
+    "failedBatches": []
+  },
+  "BWO-2026-00013": {
+    "id": "BWO-2026-00013",
+    "masterWO": null,
+    "isVirtualMaster": true,
+    "subWOs": [
+      {
+        "name": "MFG-WO-2026-00106",
+        "batchNumber": 1,
+        "status": "Completed"
+      },
+      {
+        "name": "MFG-WO-2026-00107",
+        "batchNumber": 2,
+        "status": "Completed"
+      }
+    ],
+    "batchCount": 2,
+    "productionItem": "7317N",
+    "bomNo": "BOM-7317N-002",
+    "qtyPerBatch": 440,
+    "totalQty": 880,
+    "plannedDate": "2026-09-03",
+    "workstation": "PMX-102-MOLTENI",
+    "createdAt": "2026-09-03T03:22:17.386Z",
     "failedBatches": []
   }
 }

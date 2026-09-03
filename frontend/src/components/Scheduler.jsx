@@ -330,8 +330,8 @@ const Scheduler = () => {
     return sTime;
   };
 
-  const fetchSchedule = async () => {
-    setLoading(true);
+  const fetchSchedule = async (isBackground = false) => {
+    if (!isBackground) setLoading(true);
     try {
       const response = await fetch(`${API_URL}/schedule`);
       if (!response.ok) throw new Error(`Failed to fetch schedule (${response.statusText})`);
@@ -473,6 +473,22 @@ const Scheduler = () => {
 
   const handleStartTimer = async (woName, e) => {
     if (e) e.stopPropagation();
+    const now = Date.now();
+    const previousTimer = woTimers[woName];
+
+    // 1. Optimistic Update (INSTANT 0ms visual feedback!)
+    setWoTimers(prev => ({
+      ...prev,
+      [woName]: {
+        id: woName,
+        status: 'running',
+        startTime: prev[woName]?.startTime || new Date().toISOString(),
+        lastIntervalStart: now,
+        elapsedSeconds: (prev[woName]?.elapsedSeconds || 0),
+        intervals: prev[woName]?.intervals || []
+      }
+    }));
+
     try {
       const resp = await fetch(`${API_URL}/work-orders/${encodeURIComponent(woName)}/start`, { method: 'POST' });
       const data = await resp.json();
@@ -480,14 +496,31 @@ const Scheduler = () => {
       setWoTimers(prev => ({ ...prev, [woName]: data.timer }));
       const steNote = data.transferStockEntry ? ` [Transfer: ${data.transferStockEntry}]` : '';
       showToast(`▶ Started ${woName}${steNote} — Raw materials transferred to WIP`);
-      await fetchSchedule();
+      await fetchSchedule(true);
     } catch (err) {
+      setWoTimers(prev => ({ ...prev, [woName]: previousTimer }));
       showToast(`✗ Failed to start: ${err.message}`, true);
     }
   };
 
   const handlePauseTimer = async (woName, e) => {
     if (e) e.stopPropagation();
+    const previousTimer = woTimers[woName];
+
+    // Optimistic Pause
+    setWoTimers(prev => {
+      const t = prev[woName];
+      if (!t) return prev;
+      return {
+        ...prev,
+        [woName]: {
+          ...t,
+          status: 'paused',
+          lastIntervalStart: null
+        }
+      };
+    });
+
     try {
       const resp = await fetch(`${API_URL}/work-orders/${encodeURIComponent(woName)}/pause`, { method: 'POST' });
       const data = await resp.json();
@@ -495,12 +528,30 @@ const Scheduler = () => {
       setWoTimers(prev => ({ ...prev, [woName]: data.timer }));
       showToast(`⏸ Paused ${woName} (${formatTimerDuration(data.timer?.elapsedSeconds)})`);
     } catch (err) {
+      setWoTimers(prev => ({ ...prev, [woName]: previousTimer }));
       showToast(`✗ Failed to pause: ${err.message}`, true);
     }
   };
 
   const handleResumeTimer = async (woName, e) => {
     if (e) e.stopPropagation();
+    const now = Date.now();
+    const previousTimer = woTimers[woName];
+
+    // Optimistic Resume
+    setWoTimers(prev => {
+      const t = prev[woName];
+      if (!t) return prev;
+      return {
+        ...prev,
+        [woName]: {
+          ...t,
+          status: 'running',
+          lastIntervalStart: now
+        }
+      };
+    });
+
     try {
       const resp = await fetch(`${API_URL}/work-orders/${encodeURIComponent(woName)}/resume`, { method: 'POST' });
       const data = await resp.json();
@@ -508,12 +559,30 @@ const Scheduler = () => {
       setWoTimers(prev => ({ ...prev, [woName]: data.timer }));
       showToast(`▶ Resumed ${woName}`);
     } catch (err) {
+      setWoTimers(prev => ({ ...prev, [woName]: previousTimer }));
       showToast(`✗ Failed to resume: ${err.message}`, true);
     }
   };
 
   const handleFinishTimer = async (woName, e) => {
     if (e) e.stopPropagation();
+    const previousTimer = woTimers[woName];
+
+    // Optimistic Finish
+    setWoTimers(prev => {
+      const t = prev[woName];
+      return {
+        ...prev,
+        [woName]: {
+          ...(t || {}),
+          id: woName,
+          status: 'completed',
+          lastIntervalStart: null,
+          finishedAt: new Date().toISOString()
+        }
+      };
+    });
+
     try {
       const resp = await fetch(`${API_URL}/work-orders/${encodeURIComponent(woName)}/finish`, { method: 'POST' });
       const data = await resp.json();
@@ -521,8 +590,9 @@ const Scheduler = () => {
       setWoTimers(prev => ({ ...prev, [woName]: data.timer }));
       const steNote = data.manufactureStockEntry ? ` [Manufacture: ${data.manufactureStockEntry}]` : '';
       showToast(`✓ Completed ${woName}${steNote} — Finished goods manufactured! (Total: ${formatTimerDuration(data.timer?.elapsedSeconds)})`);
-      await fetchSchedule();
+      await fetchSchedule(true);
     } catch (err) {
+      setWoTimers(prev => ({ ...prev, [woName]: previousTimer }));
       showToast(`✗ Failed to finish: ${err.message}`, true);
     }
   };
@@ -1046,7 +1116,7 @@ const Scheduler = () => {
       if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to reschedule batch group');
 
       showToast(`✓ Batch Group ${groupId} (${data.data?.updatedWOs?.length || eventsInGroup.length} Sub-Work-Orders) rescheduled to ${dateStr}`);
-      await fetchSchedule();
+      await fetchSchedule(true);
     } catch (err) {
       console.error('Batch group reschedule error:', err);
       setEvents(previousEvents);
