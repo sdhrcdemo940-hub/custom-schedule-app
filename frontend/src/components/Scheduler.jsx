@@ -597,6 +597,178 @@ const Scheduler = () => {
     }
   };
 
+  const handleCancelTimer = async (woName, e) => {
+    if (e) e.stopPropagation();
+    const previousTimer = woTimers[woName];
+
+    setWoTimers(prev => ({
+      ...prev,
+      [woName]: {
+        ...(prev[woName] || {}),
+        id: woName,
+        status: 'cancelled',
+        lastIntervalStart: null,
+        cancelledAt: new Date().toISOString()
+      }
+    }));
+
+    try {
+      const resp = await fetch(`${API_URL}/work-orders/${encodeURIComponent(woName)}/cancel`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to cancel Work Order');
+      setWoTimers(prev => ({ ...prev, [woName]: data.timer }));
+      showToast(`✕ Cancelled Work Order ${woName}`);
+      await fetchSchedule(true);
+    } catch (err) {
+      setWoTimers(prev => ({ ...prev, [woName]: previousTimer }));
+      showToast(`✗ Failed to cancel: ${err.message}`, true);
+    }
+  };
+
+  // ── Job Card Action Handlers (Start, Pause/Stop, Resume, Finish, Cancel) ──
+  const handleStartJCTimer = async (jcName, e) => {
+    if (e) e.stopPropagation();
+    const now = Date.now();
+    const previousTimer = woTimers[jcName];
+
+    setWoTimers(prev => ({
+      ...prev,
+      [jcName]: {
+        id: jcName,
+        type: 'jobcard',
+        status: 'running',
+        startTime: prev[jcName]?.startTime || new Date().toISOString(),
+        lastIntervalStart: now,
+        elapsedSeconds: (prev[jcName]?.elapsedSeconds || 0),
+        intervals: prev[jcName]?.intervals || []
+      }
+    }));
+
+    try {
+      const resp = await fetch(`${API_URL}/job-cards/${encodeURIComponent(jcName)}/start`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to start Job Card');
+      setWoTimers(prev => ({ ...prev, [jcName]: data.timer }));
+      showToast(`▶ Started Job Card ${jcName}`);
+      await fetchSchedule(true);
+    } catch (err) {
+      setWoTimers(prev => ({ ...prev, [jcName]: previousTimer }));
+      showToast(`✗ Failed to start Job Card: ${err.message}`, true);
+    }
+  };
+
+  const handlePauseJCTimer = async (jcName, e) => {
+    if (e) e.stopPropagation();
+    const previousTimer = woTimers[jcName];
+
+    setWoTimers(prev => {
+      const t = prev[jcName];
+      return {
+        ...prev,
+        [jcName]: {
+          ...(t || {}),
+          status: 'paused',
+          lastIntervalStart: null
+        }
+      };
+    });
+
+    try {
+      const resp = await fetch(`${API_URL}/job-cards/${encodeURIComponent(jcName)}/pause`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to pause Job Card');
+      setWoTimers(prev => ({ ...prev, [jcName]: data.timer }));
+      showToast(`⏸ Paused Job Card ${jcName} (${formatTimerDuration(data.timer?.elapsedSeconds)})`);
+      await fetchSchedule(true);
+    } catch (err) {
+      setWoTimers(prev => ({ ...prev, [jcName]: previousTimer }));
+      showToast(`✗ Failed to pause Job Card: ${err.message}`, true);
+    }
+  };
+
+  const handleResumeJCTimer = async (jcName, e) => {
+    if (e) e.stopPropagation();
+    const now = Date.now();
+    const previousTimer = woTimers[jcName];
+
+    setWoTimers(prev => ({
+      ...prev,
+      [jcName]: {
+        ...(prev[jcName] || {}),
+        status: 'running',
+        lastIntervalStart: now
+      }
+    }));
+
+    try {
+      const resp = await fetch(`${API_URL}/job-cards/${encodeURIComponent(jcName)}/resume`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to resume Job Card');
+      setWoTimers(prev => ({ ...prev, [jcName]: data.timer }));
+      showToast(`▶ Resumed Job Card ${jcName}`);
+      await fetchSchedule(true);
+    } catch (err) {
+      setWoTimers(prev => ({ ...prev, [jcName]: previousTimer }));
+      showToast(`✗ Failed to resume Job Card: ${err.message}`, true);
+    }
+  };
+
+  const handleFinishJCTimer = async (jcName, e) => {
+    if (e) e.stopPropagation();
+    const previousTimer = woTimers[jcName];
+
+    setWoTimers(prev => ({
+      ...prev,
+      [jcName]: {
+        ...(prev[jcName] || {}),
+        id: jcName,
+        status: 'completed',
+        lastIntervalStart: null,
+        finishedAt: new Date().toISOString()
+      }
+    }));
+
+    try {
+      const resp = await fetch(`${API_URL}/job-cards/${encodeURIComponent(jcName)}/finish`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to complete Job Card');
+      setWoTimers(prev => ({ ...prev, [jcName]: data.timer }));
+      showToast(`✓ Completed Job Card ${jcName}`);
+      await fetchSchedule(true);
+    } catch (err) {
+      setWoTimers(prev => ({ ...prev, [jcName]: previousTimer }));
+      showToast(`✗ Failed to complete Job Card: ${err.message}`, true);
+    }
+  };
+
+  const handleCancelJCTimer = async (jcName, e) => {
+    if (e) e.stopPropagation();
+    const previousTimer = woTimers[jcName];
+
+    setWoTimers(prev => ({
+      ...prev,
+      [jcName]: {
+        ...(prev[jcName] || {}),
+        id: jcName,
+        status: 'cancelled',
+        lastIntervalStart: null,
+        cancelledAt: new Date().toISOString()
+      }
+    }));
+
+    try {
+      const resp = await fetch(`${API_URL}/job-cards/${encodeURIComponent(jcName)}/cancel`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to cancel Job Card');
+      setWoTimers(prev => ({ ...prev, [jcName]: data.timer }));
+      showToast(`✕ Cancelled Job Card ${jcName}`);
+      await fetchSchedule(true);
+    } catch (err) {
+      setWoTimers(prev => ({ ...prev, [jcName]: previousTimer }));
+      showToast(`✗ Failed to cancel Job Card: ${err.message}`, true);
+    }
+  };
+
   // Status colors matching production standards
   const getStatusColor = (status) => {
     const colors = {
@@ -625,12 +797,26 @@ const Scheduler = () => {
     return colors[status] || '#7c3aed';
   };
 
-  // Check if a Work Order is locked from drag & drop (already started or completed)
+  // Check if a Work Order or Job Card is locked from drag & drop (already started, completed, paused, or cancelled)
   const isWODragLocked = (event) => {
     const ext = event?.extendedProps || event;
-    if (ext?.type !== 'workorder') return false;
     const status = (ext?.status || '').trim();
-    return status === 'In Process' || status === 'Completed' || status === 'Stopped';
+    const docName = ext?.docName || ext?.id;
+    const timer = woTimers[docName];
+    const timerStatus = timer?.status;
+
+    return (
+      status === 'In Process' ||
+      status === 'Work In Progress' ||
+      status === 'Completed' ||
+      status === 'Stopped' ||
+      status === 'On Hold' ||
+      status === 'Cancelled' ||
+      timerStatus === 'running' ||
+      timerStatus === 'paused' ||
+      timerStatus === 'completed' ||
+      timerStatus === 'cancelled'
+    );
   };
 
   const formatDateTimeLocal = (date) => {
@@ -1846,15 +2032,79 @@ const Scheduler = () => {
                                               {isJobCard ? (
                                                 <>
                                                   {ext.workOrder && <span className="prod-parent-wo-tag" style={{ fontSize: '11px', color: '#475569' }}>WO: {ext.workOrder}</span>}
-                                                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px', flexWrap: 'wrap' }}>
                                                     <span className="prod-doc-id-badge badge-jc">JC: {ext.docName}</span>
-                                                    {ext.timeRange && (
-                                                      <span className="prod-time-range-badge" style={{ fontSize: '10px', color: '#1e3a8a', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '1px 5px', borderRadius: '4px', fontWeight: '600' }}>
-                                                        🕒 {ext.timeRange}
-                                                      </span>
-                                                    )}
+                                                    <span className="prod-status-tag-sm" style={{ fontSize: '9px', color: '#64748b', fontWeight: '700' }}>{ext.status}</span>
                                                   </div>
+                                                  {ext.timeRange && (
+                                                    <span
+                                                      className="prod-time-range-badge clickable-time-badge"
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        if (!dragLocked) openEditTimeModal(ev);
+                                                      }}
+                                                      title={dragLocked ? 'Locked from rescheduling' : 'Click to edit date & time'}
+                                                      style={{ fontSize: '10px', color: '#1e3a8a', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '1px 5px', borderRadius: '4px', alignSelf: 'flex-start', fontWeight: '600', display: 'inline-flex', alignItems: 'center', gap: '3px', cursor: dragLocked ? 'not-allowed' : 'pointer' }}
+                                                    >
+                                                      🕒 {ext.timeRange} {!dragLocked && <span style={{ fontSize: '9px', opacity: 0.7 }}>✏️</span>}
+                                                    </span>
+                                                  )}
                                                   {ext.operation && <span className="prod-op-tag" style={{ alignSelf: 'flex-start', marginTop: '2px' }}>{ext.operation}</span>}
+
+                                                  {/* Interactive Live Production Timer Execution Bar for Job Card */}
+                                                  {(() => {
+                                                    const t = woTimers[ext.docName];
+                                                    const timerStatus = t?.status || (ext.status === 'Work In Progress' ? 'running' : (ext.status === 'On Hold' ? 'paused' : 'idle'));
+                                                    const totalSecs = getWOTimerSeconds(ext.docName);
+                                                    const isCompleted = ext.status === 'Completed' || timerStatus === 'completed';
+                                                    const isCancelled = ext.status === 'Cancelled' || timerStatus === 'cancelled';
+
+                                                    return (
+                                                      <div className="wo-timer-bar" onClick={(e) => e.stopPropagation()}>
+                                                        {isCompleted ? (
+                                                          <div className="wo-timer-completed">
+                                                            <span className="timer-done-icon">✓</span>
+                                                            <span>Completed ({formatTimerDuration(totalSecs)})</span>
+                                                          </div>
+                                                        ) : isCancelled ? (
+                                                          <div className="wo-timer-cancelled" style={{ color: '#ef4444', fontSize: '11px', fontWeight: 'bold' }}>
+                                                            <span>✕ Cancelled</span>
+                                                          </div>
+                                                        ) : timerStatus === 'running' ? (
+                                                          <div className="wo-timer-running">
+                                                            <div className="timer-clock">
+                                                              <span className="timer-pulse-dot"></span>
+                                                              <span className="timer-digits">{formatTimerDuration(totalSecs)}</span>
+                                                            </div>
+                                                            <div className="timer-btn-group">
+                                                              <button className="timer-btn btn-pause" onClick={(e) => handlePauseJCTimer(ext.docName, e)} title="Pause Job Card">⏸ Stop</button>
+                                                              <button className="timer-btn btn-finish" onClick={(e) => handleFinishJCTimer(ext.docName, e)} title="Finish Job Card">⏹ Finish</button>
+                                                              <button className="timer-btn btn-cancel" onClick={(e) => handleCancelJCTimer(ext.docName, e)} title="Cancel Job Card" style={{ backgroundColor: '#ef4444', color: '#fff' }}>✕ Cancel</button>
+                                                            </div>
+                                                          </div>
+                                                        ) : timerStatus === 'paused' ? (
+                                                          <div className="wo-timer-paused">
+                                                            <div className="timer-clock paused">
+                                                              <span className="timer-paused-dot"></span>
+                                                              <span className="timer-digits">{formatTimerDuration(totalSecs)}</span>
+                                                            </div>
+                                                            <div className="timer-btn-group">
+                                                              <button className="timer-btn btn-resume" onClick={(e) => handleResumeJCTimer(ext.docName, e)} title="Resume Job Card">▶ Resume</button>
+                                                              <button className="timer-btn btn-finish" onClick={(e) => handleFinishJCTimer(ext.docName, e)} title="Finish Job Card">⏹ Finish</button>
+                                                              <button className="timer-btn btn-cancel" onClick={(e) => handleCancelJCTimer(ext.docName, e)} title="Cancel Job Card" style={{ backgroundColor: '#ef4444', color: '#fff' }}>✕ Cancel</button>
+                                                            </div>
+                                                          </div>
+                                                        ) : (
+                                                          <div className="wo-timer-idle">
+                                                            <button className="timer-btn btn-start" onClick={(e) => handleStartJCTimer(ext.docName, e)} title="Start Job Card Timer">
+                                                              ▶ Start Job
+                                                            </button>
+                                                            <button className="timer-btn btn-cancel" onClick={(e) => handleCancelJCTimer(ext.docName, e)} title="Cancel Job Card" style={{ backgroundColor: '#f87171', color: '#fff', marginLeft: '4px', padding: '2px 6px', fontSize: '10px' }}>✕</button>
+                                                          </div>
+                                                        )}
+                                                      </div>
+                                                    );
+                                                  })()}
                                                 </>
                                               ) : (
                                                 <>
@@ -1877,12 +2127,13 @@ const Scheduler = () => {
                                                     </span>
                                                   )}
 
-                                                  {/* Interactive Live Production Timer Execution Bar */}
+                                                  {/* Interactive Live Production Timer Execution Bar for Work Order */}
                                                   {(() => {
                                                     const t = woTimers[ext.docName];
                                                     const timerStatus = t?.status || 'idle';
                                                     const totalSecs = getWOTimerSeconds(ext.docName);
                                                     const isCompleted = ext.status === 'Completed' || timerStatus === 'completed';
+                                                    const isCancelled = ext.status === 'Cancelled' || timerStatus === 'cancelled';
 
                                                     return (
                                                       <div className="wo-timer-bar" onClick={(e) => e.stopPropagation()}>
@@ -1891,6 +2142,10 @@ const Scheduler = () => {
                                                             <span className="timer-done-icon">✓</span>
                                                             <span>Completed ({formatTimerDuration(totalSecs)})</span>
                                                           </div>
+                                                        ) : isCancelled ? (
+                                                          <div className="wo-timer-cancelled" style={{ color: '#ef4444', fontSize: '11px', fontWeight: 'bold' }}>
+                                                            <span>✕ Cancelled</span>
+                                                          </div>
                                                         ) : timerStatus === 'running' ? (
                                                           <div className="wo-timer-running">
                                                             <div className="timer-clock">
@@ -1898,8 +2153,9 @@ const Scheduler = () => {
                                                               <span className="timer-digits">{formatTimerDuration(totalSecs)}</span>
                                                             </div>
                                                             <div className="timer-btn-group">
-                                                              <button className="timer-btn btn-pause" onClick={(e) => handlePauseTimer(ext.docName, e)} title="Pause Timer">⏸ Pause</button>
+                                                              <button className="timer-btn btn-pause" onClick={(e) => handlePauseTimer(ext.docName, e)} title="Pause Timer">⏸ Stop</button>
                                                               <button className="timer-btn btn-finish" onClick={(e) => handleFinishTimer(ext.docName, e)} title="Finish Work Order">⏹ Finish</button>
+                                                              <button className="timer-btn btn-cancel" onClick={(e) => handleCancelTimer(ext.docName, e)} title="Cancel Work Order" style={{ backgroundColor: '#ef4444', color: '#fff' }}>✕ Cancel</button>
                                                             </div>
                                                           </div>
                                                         ) : timerStatus === 'paused' ? (
@@ -1911,6 +2167,7 @@ const Scheduler = () => {
                                                             <div className="timer-btn-group">
                                                               <button className="timer-btn btn-resume" onClick={(e) => handleResumeTimer(ext.docName, e)} title="Resume Timer">▶ Resume</button>
                                                               <button className="timer-btn btn-finish" onClick={(e) => handleFinishTimer(ext.docName, e)} title="Finish Work Order">⏹ Finish</button>
+                                                              <button className="timer-btn btn-cancel" onClick={(e) => handleCancelTimer(ext.docName, e)} title="Cancel Work Order" style={{ backgroundColor: '#ef4444', color: '#fff' }}>✕ Cancel</button>
                                                             </div>
                                                           </div>
                                                         ) : (
@@ -1918,6 +2175,7 @@ const Scheduler = () => {
                                                             <button className="timer-btn btn-start" onClick={(e) => handleStartTimer(ext.docName, e)} title="Start Production Timer">
                                                               ▶ Start Production
                                                             </button>
+                                                            <button className="timer-btn btn-cancel" onClick={(e) => handleCancelTimer(ext.docName, e)} title="Cancel Work Order" style={{ backgroundColor: '#f87171', color: '#fff', marginLeft: '4px', padding: '2px 6px', fontSize: '10px' }}>✕</button>
                                                           </div>
                                                         )}
                                                       </div>
@@ -1932,34 +2190,77 @@ const Scheduler = () => {
                                                         <span className="jc-summary-caret">▾</span>
                                                       </summary>
                                                       <div className="prod-card-jc-dropdown-menu">
-                                                        {jobCards.map(jc => (
-                                                          <div
-                                                            key={jc.name}
-                                                            className="prod-card-jc-dropdown-item"
-                                                            onClick={(e) => {
-                                                              e.stopPropagation();
-                                                              openDoc('jobcard', jc.name);
-                                                            }}
-                                                            title={`Click to open Job Card ${jc.name} in ERPNext\nOperation: ${jc.operation || 'N/A'}\nWorkstation: ${jc.workstation || 'N/A'}\nStatus: ${jc.status || 'N/A'}`}
-                                                          >
-                                                            <div className="jc-item-info">
-                                                              <div className="jc-item-name-row">
-                                                                <span className="jc-item-name">{jc.name}</span>
-                                                                {jc.status && (
-                                                                  <span className="jc-item-status-pill">
-                                                                    <span className="jc-item-status-dot" style={{ backgroundColor: getStatusColor(jc.status) }}></span>
-                                                                    {jc.status}
+                                                        {jobCards.map(jc => {
+                                                          const t = woTimers[jc.name];
+                                                          const timerStatus = t?.status || (jc.status === 'Work In Progress' ? 'running' : (jc.status === 'On Hold' ? 'paused' : 'idle'));
+                                                          const totalSecs = getWOTimerSeconds(jc.name);
+                                                          const isCompleted = jc.status === 'Completed' || timerStatus === 'completed';
+                                                          const isCancelled = jc.status === 'Cancelled' || timerStatus === 'cancelled';
+
+                                                          return (
+                                                            <div
+                                                              key={jc.name}
+                                                              className="prod-card-jc-dropdown-item"
+                                                              onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                openDoc('jobcard', jc.name);
+                                                              }}
+                                                              title={`Click to open Job Card ${jc.name} in ERPNext\nOperation: ${jc.operation || 'N/A'}\nWorkstation: ${jc.workstation || 'N/A'}\nStatus: ${jc.status || 'N/A'}`}
+                                                            >
+                                                              <div className="jc-item-info" style={{ width: '100%' }}>
+                                                                <div className="jc-item-name-row">
+                                                                  <span className="jc-item-name">{jc.name}</span>
+                                                                  {jc.status && (
+                                                                    <span className="jc-item-status-pill">
+                                                                      <span className="jc-item-status-dot" style={{ backgroundColor: getStatusColor(jc.status) }}></span>
+                                                                      {jc.status}
+                                                                    </span>
+                                                                  )}
+                                                                </div>
+                                                                {jc.operation && (
+                                                                  <span className="jc-item-op">
+                                                                    {jc.operation} {jc.workstation ? `· ${jc.workstation}` : ''}
                                                                   </span>
                                                                 )}
+                                                                {/* Inline Job Card Timer Controls */}
+                                                                <div className="sub-item-bottom-row" style={{ marginTop: '4px' }} onClick={(e) => e.stopPropagation()}>
+                                                                  {isCompleted ? (
+                                                                    <span className="sub-timer-done" title={`Total time: ${formatTimerDuration(totalSecs)}`}>
+                                                                      ✓ Completed {totalSecs > 0 ? `(${formatTimerDuration(totalSecs)})` : ''}
+                                                                    </span>
+                                                                  ) : isCancelled ? (
+                                                                    <span style={{ color: '#ef4444', fontSize: '10px', fontWeight: 'bold' }}>✕ Cancelled</span>
+                                                                  ) : timerStatus === 'running' ? (
+                                                                    <div className="sub-timer-live">
+                                                                      <span className="timer-pulse-dot-sm"></span>
+                                                                      <span className="timer-digits-sm">{formatTimerDuration(totalSecs)}</span>
+                                                                      <button className="sub-timer-btn" onClick={(e) => handlePauseJCTimer(jc.name, e)} title="Pause Job Card">⏸ Stop</button>
+                                                                      <button className="sub-timer-btn finish" onClick={(e) => handleFinishJCTimer(jc.name, e)} title="Finish Job Card">⏹</button>
+                                                                      <button className="sub-timer-btn cancel" onClick={(e) => handleCancelJCTimer(jc.name, e)} title="Cancel Job Card" style={{ backgroundColor: '#ef4444', color: '#fff', padding: '1px 4px', borderRadius: '3px', fontSize: '9px' }}>✕</button>
+                                                                    </div>
+                                                                  ) : timerStatus === 'paused' ? (
+                                                                    <div className="sub-timer-live paused">
+                                                                      <span className="timer-paused-dot-sm"></span>
+                                                                      <span className="timer-digits-sm">{formatTimerDuration(totalSecs)}</span>
+                                                                      <button className="sub-timer-btn resume" onClick={(e) => handleResumeJCTimer(jc.name, e)} title="Resume Job Card">▶</button>
+                                                                      <button className="sub-timer-btn finish" onClick={(e) => handleFinishJCTimer(jc.name, e)} title="Finish Job Card">⏹</button>
+                                                                      <button className="sub-timer-btn cancel" onClick={(e) => handleCancelJCTimer(jc.name, e)} title="Cancel Job Card" style={{ backgroundColor: '#ef4444', color: '#fff', padding: '1px 4px', borderRadius: '3px', fontSize: '9px' }}>✕</button>
+                                                                    </div>
+                                                                  ) : (
+                                                                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                                                                      <button className="sub-timer-btn start" onClick={(e) => handleStartJCTimer(jc.name, e)} title="Start Job Card">
+                                                                        ▶ Start
+                                                                      </button>
+                                                                      <button className="sub-timer-btn cancel" onClick={(e) => handleCancelJCTimer(jc.name, e)} title="Cancel Job Card" style={{ backgroundColor: '#f87171', color: '#fff', border: 'none', borderRadius: '3px', padding: '1px 5px', fontSize: '9px', cursor: 'pointer' }}>
+                                                                        ✕
+                                                                      </button>
+                                                                    </div>
+                                                                  )}
+                                                                </div>
                                                               </div>
-                                                              {jc.operation && (
-                                                                <span className="jc-item-op">
-                                                                  {jc.operation} {jc.workstation ? `· ${jc.workstation}` : ''}
-                                                                </span>
-                                                              )}
                                                             </div>
-                                                          </div>
-                                                        ))}
+                                                          );
+                                                        })}
                                                       </div>
                                                     </details>
                                                   ) : rawOps.length > 0 ? (

@@ -980,6 +980,281 @@ app.post('/api/work-orders/:id/finish', async (req, res) => {
   }
 });
 
+// Cancel Work Order Timer & Status
+app.post('/api/work-orders/:id/cancel', async (req, res) => {
+  const woId = req.params.id;
+  try {
+    const timers = loadTimers();
+    const timer = timers[woId] || { id: woId, elapsedSeconds: 0 };
+
+    timer.status = 'cancelled';
+    timer.lastIntervalStart = null;
+    timer.cancelledAt = new Date().toISOString();
+
+    saveTimers(timers);
+    console.log(`✕ Cancelled timer for Work Order ${woId}`);
+
+    // Update ERPNext WO status to Cancelled
+    try {
+      await erpnextMethodAPI.post('/frappe.client.set_value', {
+        doctype: 'Work Order',
+        name: woId,
+        fieldname: 'status',
+        value: 'Cancelled'
+      });
+      console.log(`Set Work Order ${woId} status to 'Cancelled' in ERPNext`);
+    } catch (erpErr) {
+      console.warn(`Could not update ERPNext cancel status for WO ${woId}:`, parseERPNextError(erpErr));
+    }
+
+    res.json({ success: true, timer, message: `Work Order ${woId} cancelled` });
+  } catch (error) {
+    console.error('Error cancelling WO timer:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==================== JOB CARD TIMER & ACTION ENDPOINTS ====================
+
+// Start Job Card Timer
+app.post('/api/job-cards/:id/start', async (req, res) => {
+  const jcId = req.params.id;
+  try {
+    const now = Date.now();
+    const nowIso = new Date().toISOString();
+    const timers = loadTimers();
+    const existing = timers[jcId] || { elapsedSeconds: 0 };
+
+    timers[jcId] = {
+      id: jcId,
+      type: 'jobcard',
+      status: 'running',
+      startTime: existing.startTime || nowIso,
+      lastIntervalStart: now,
+      elapsedSeconds: existing.elapsedSeconds || 0,
+      intervals: existing.intervals || []
+    };
+
+    saveTimers(timers);
+    console.log(`⏱ Started timer for Job Card ${jcId}`);
+
+    // Update Job Card status to 'Work In Progress' in ERPNext
+    try {
+      const pad = n => String(n).padStart(2, '0');
+      const d = new Date();
+      const startStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+      await erpnextMethodAPI.post('/frappe.client.set_value', {
+        doctype: 'Job Card',
+        name: jcId,
+        fieldname: 'status',
+        value: 'Work In Progress'
+      });
+      try {
+        await erpnextMethodAPI.post('/frappe.client.set_value', {
+          doctype: 'Job Card',
+          name: jcId,
+          fieldname: 'actual_start_date',
+          value: startStr
+        });
+      } catch (e) {}
+
+      console.log(`Set Job Card ${jcId} status to 'Work In Progress' in ERPNext`);
+    } catch (erpErr) {
+      console.warn(`Could not update ERPNext status for Job Card ${jcId}:`, parseERPNextError(erpErr));
+    }
+
+    res.json({
+      success: true,
+      timer: timers[jcId],
+      message: `Job Card ${jcId} started.`
+    });
+  } catch (error) {
+    console.error('Error starting Job Card timer:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Pause / Stop Job Card Timer
+app.post('/api/job-cards/:id/pause', async (req, res) => {
+  const jcId = req.params.id;
+  try {
+    const now = Date.now();
+    const timers = loadTimers();
+    const timer = timers[jcId];
+
+    if (!timer) {
+      return res.status(404).json({ success: false, error: `No timer found for Job Card ${jcId}` });
+    }
+
+    if (timer.status === 'running' && timer.lastIntervalStart) {
+      const added = Math.max(0, Math.floor((now - timer.lastIntervalStart) / 1000));
+      timer.elapsedSeconds = (timer.elapsedSeconds || 0) + added;
+      if (!Array.isArray(timer.intervals)) timer.intervals = [];
+      timer.intervals.push({ start: timer.lastIntervalStart, end: now, duration: added });
+    }
+
+    timer.status = 'paused';
+    timer.lastIntervalStart = null;
+    timer.pausedAt = new Date().toISOString();
+
+    saveTimers(timers);
+    console.log(`⏸ Paused timer for Job Card ${jcId} (Total elapsed: ${timer.elapsedSeconds}s)`);
+
+    // Update ERPNext Job Card status to 'On Hold' (Stopped/Paused)
+    try {
+      await erpnextMethodAPI.post('/frappe.client.set_value', {
+        doctype: 'Job Card',
+        name: jcId,
+        fieldname: 'status',
+        value: 'On Hold'
+      });
+      console.log(`Set Job Card ${jcId} status to 'On Hold' in ERPNext (paused)`);
+    } catch (erpErr) {
+      console.warn(`Could not update ERPNext pause status for Job Card ${jcId}:`, parseERPNextError(erpErr));
+    }
+
+    res.json({ success: true, timer, message: `Job Card ${jcId} paused` });
+  } catch (error) {
+    console.error('Error pausing Job Card timer:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Resume Job Card Timer
+app.post('/api/job-cards/:id/resume', async (req, res) => {
+  const jcId = req.params.id;
+  try {
+    const now = Date.now();
+    const timers = loadTimers();
+    const timer = timers[jcId];
+
+    if (!timer) {
+      return res.status(404).json({ success: false, error: `No timer found for Job Card ${jcId}` });
+    }
+
+    timer.status = 'running';
+    timer.lastIntervalStart = now;
+    timer.resumedAt = new Date().toISOString();
+
+    saveTimers(timers);
+    console.log(`▶ Resumed timer for Job Card ${jcId}`);
+
+    // Update ERPNext Job Card status back to 'Work In Progress'
+    try {
+      await erpnextMethodAPI.post('/frappe.client.set_value', {
+        doctype: 'Job Card',
+        name: jcId,
+        fieldname: 'status',
+        value: 'Work In Progress'
+      });
+      console.log(`Set Job Card ${jcId} status back to 'Work In Progress' in ERPNext (resumed)`);
+    } catch (erpErr) {
+      console.warn(`Could not update ERPNext resume status for Job Card ${jcId}:`, parseERPNextError(erpErr));
+    }
+
+    res.json({ success: true, timer, message: `Job Card ${jcId} resumed` });
+  } catch (error) {
+    console.error('Error resuming Job Card timer:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Finish / Complete Job Card
+app.post('/api/job-cards/:id/finish', async (req, res) => {
+  const jcId = req.params.id;
+  try {
+    const now = Date.now();
+    const nowIso = new Date().toISOString();
+    const timers = loadTimers();
+    const timer = timers[jcId] || { elapsedSeconds: 0 };
+
+    if (timer.status === 'running' && timer.lastIntervalStart) {
+      const added = Math.max(0, Math.floor((now - timer.lastIntervalStart) / 1000));
+      timer.elapsedSeconds = (timer.elapsedSeconds || 0) + added;
+      if (!Array.isArray(timer.intervals)) timer.intervals = [];
+      timer.intervals.push({ start: timer.lastIntervalStart, end: now, duration: added });
+    }
+
+    timer.status = 'completed';
+    timer.lastIntervalStart = null;
+    timer.finishedAt = nowIso;
+
+    saveTimers(timers);
+
+    // Update ERPNext Job Card status to 'Completed' and set actual_end_date
+    try {
+      const pad = n => String(n).padStart(2, '0');
+      const d = new Date();
+      const endStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+      await erpnextMethodAPI.post('/frappe.client.set_value', {
+        doctype: 'Job Card',
+        name: jcId,
+        fieldname: 'status',
+        value: 'Completed'
+      });
+      try {
+        await erpnextMethodAPI.post('/frappe.client.set_value', {
+          doctype: 'Job Card',
+          name: jcId,
+          fieldname: 'actual_end_date',
+          value: endStr
+        });
+      } catch (e) {}
+
+      console.log(`Set Job Card ${jcId} status to 'Completed' in ERPNext`);
+    } catch (erpErr) {
+      console.warn(`Could not update ERPNext completion for Job Card ${jcId}:`, parseERPNextError(erpErr));
+    }
+
+    console.log(`⏹ Completed Job Card ${jcId}`);
+
+    res.json({
+      success: true,
+      timer,
+      message: `Job Card ${jcId} completed.`
+    });
+  } catch (error) {
+    console.error('Error completing Job Card:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Cancel Job Card
+app.post('/api/job-cards/:id/cancel', async (req, res) => {
+  const jcId = req.params.id;
+  try {
+    const timers = loadTimers();
+    const timer = timers[jcId] || { id: jcId, elapsedSeconds: 0 };
+
+    timer.status = 'cancelled';
+    timer.lastIntervalStart = null;
+    timer.cancelledAt = new Date().toISOString();
+
+    saveTimers(timers);
+    console.log(`✕ Cancelled Job Card ${jcId}`);
+
+    // Update ERPNext Job Card status to 'Cancelled'
+    try {
+      await erpnextMethodAPI.post('/frappe.client.set_value', {
+        doctype: 'Job Card',
+        name: jcId,
+        fieldname: 'status',
+        value: 'Cancelled'
+      });
+      console.log(`Set Job Card ${jcId} status to 'Cancelled' in ERPNext`);
+    } catch (erpErr) {
+      console.warn(`Could not update ERPNext cancel status for Job Card ${jcId}:`, parseERPNextError(erpErr));
+    }
+
+    res.json({ success: true, timer, message: `Job Card ${jcId} cancelled` });
+  } catch (error) {
+    console.error('Error cancelling Job Card:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ==================== BATCH WORK ORDER ENDPOINTS ====================
 
 // Create a Batch Work Order Group (1 master + N sub Work Orders)
