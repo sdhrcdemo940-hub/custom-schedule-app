@@ -409,6 +409,15 @@ app.post('/api/work-orders', async (req, res) => {
     const response = await erpnextAPI.post('/Work Order', payload);
     const newWO = response.data.data;
 
+    // Auto-submit the Work Order so it doesn't stay as Draft
+    try {
+      await erpnextAPI.put(`/Work Order/${newWO.name}`, { docstatus: 1 });
+      newWO.docstatus = 1;
+      newWO.status = 'Not Started';
+    } catch (submitErr) {
+      console.warn(`Could not auto-submit Work Order ${newWO.name}:`, submitErr.message);
+    }
+
     // Save the intended workstation in the in-memory map so the matrix can
     // place this WO in the correct row
     if (workstation) {
@@ -483,7 +492,7 @@ app.get('/api/work-orders/timers', (req, res) => {
 });
 
 // Helper: Top-up missing raw material item stock in ERPNext
-const autoReplenishStock = async (itemCode, minQty = 5000) => {
+const autoReplenishStock = async (itemCode, minQty = 100000) => {
   try {
     const pad = n => String(n).padStart(2, '0');
     const d = new Date();
@@ -1029,6 +1038,17 @@ app.post('/api/batch-work-orders', async (req, res) => {
       }
     }
 
+// Helper to map Work Order status to Virtual Work Order Sub DocType Select options:
+// ('Draft', 'In Process', 'Completed', 'Failed')
+const mapStatusToVWO = (st) => {
+  if (!st) return 'Draft';
+  const lower = String(st).toLowerCase();
+  if (['completed', 'closed'].includes(lower)) return 'Completed';
+  if (['in process', 'in progress'].includes(lower)) return 'In Process';
+  if (['failed', 'cancelled', 'stopped'].includes(lower)) return 'Failed';
+  return 'Draft'; // 'Not Started', 'Draft', etc.
+};
+
     // Save batch group to ERPNext Virtual Work Order
     const docPayload = {
       doctype: "Virtual Work Order",
@@ -1043,7 +1063,7 @@ app.post('/api/batch-work-orders', async (req, res) => {
       sub_wos: subWOs.map(sub => ({
         sub_wo: sub.name,
         batch_number: sub.batchNumber,
-        status: sub.status
+        status: mapStatusToVWO(sub.status)
       }))
     };
     
@@ -1051,8 +1071,15 @@ app.post('/api/batch-work-orders', async (req, res) => {
     try {
       const vwoResp = await erpnextAPI.post('/Virtual Work Order', docPayload);
       batchGroupId = vwoResp.data.data.name;
+      
+      // Auto-submit the Virtual Work Order so it doesn't stay as Draft
+      try {
+        await erpnextAPI.put(`/Virtual Work Order/${batchGroupId}`, { docstatus: 1 });
+      } catch (submitErr) {
+        console.warn(`Could not auto-submit Virtual Work Order ${batchGroupId}:`, submitErr.message);
+      }
     } catch (vwoErr) {
-      console.error('Failed to save Virtual Work Order to ERPNext:', vwoErr.message);
+      console.error('Failed to save Virtual Work Order to ERPNext:', vwoErr.response ? vwoErr.response.data : vwoErr.message);
     }
 
     console.log(`=== Batch Group ${batchGroupId} complete: ${subWOs.length}/${numBatches} sub-WOs created ===\n`);
@@ -1598,10 +1625,16 @@ app.get('/api/schedule', async (req, res) => {
 
     // Enrich Work Orders with batch group metadata from ERPNext
     const woToBatchMap = {};
+    const batchGroupsList = [];
+    const liveWoMap = {};
+    (workOrdersDetails || []).filter(Boolean).forEach(w => {
+      liveWoMap[w.name] = w;
+    });
+
     try {
       const vwoList = await erpnextAPI.get('/Virtual Work Order', {
         params: {
-          fields: JSON.stringify(['name']),
+          fields: JSON.stringify(['name', 'creation']),
           filters: JSON.stringify([['docstatus', '!=', 2]]),
           limit_page_length: 500
         }
@@ -1610,6 +1643,41 @@ app.get('/api/schedule', async (req, res) => {
         try {
           const full = await erpnextAPI.get(`/Virtual Work Order/${v.name}`);
           const group = full.data.data;
+
+          const subWOsEnriched = (group.sub_wos || []).map(s => {
+            const liveWo = liveWoMap[s.sub_wo];
+            const liveStatus = liveWo ? liveWo.status : s.status;
+            return {
+              name: s.sub_wo,
+              batchNumber: s.batch_number,
+              status: liveStatus
+            };
+          });
+
+          const completedCount = subWOsEnriched.filter(s => (s.status || '').toLowerCase() === 'completed').length;
+          const inProcessCount = subWOsEnriched.filter(s => (s.status || '').toLowerCase() === 'in process').length;
+
+          batchGroupsList.push({
+            id: group.name,
+            masterWO: group.master_wo,
+            isVirtualMaster: group.is_virtual_master === 1,
+            productionItem: group.production_item,
+            bomNo: group.bom_no,
+            batchCount: group.batch_count,
+            qtyPerBatch: group.qty_per_batch,
+            totalQty: group.total_qty,
+            plannedDate: group.planned_date,
+            workstation: group.workstation,
+            createdAt: group.creation,
+            subWOs: subWOsEnriched,
+            progress: {
+              total: subWOsEnriched.length,
+              completed: completedCount,
+              inProcess: inProcessCount,
+              percentage: subWOsEnriched.length > 0 ? Math.round((completedCount / subWOsEnriched.length) * 100) : 0
+            }
+          });
+
           // Mark master WO
           if (group.master_wo) {
             woToBatchMap[group.master_wo] = {
@@ -1622,8 +1690,11 @@ app.get('/api/schedule', async (req, res) => {
               totalQty: group.total_qty
             };
           }
-          // Mark sub WOs
+          // Mark sub WOs and bind workstation
           (group.sub_wos || []).forEach(sub => {
+            if (group.workstation && group.workstation !== 'Unassigned') {
+              woWorkstationMap[sub.sub_wo] = group.workstation;
+            }
             woToBatchMap[sub.sub_wo] = {
               batchGroupId: group.name,
               role: 'sub',
@@ -1632,7 +1703,8 @@ app.get('/api/schedule', async (req, res) => {
               masterWO: group.master_wo,
               productionItem: group.production_item,
               qtyPerBatch: group.qty_per_batch,
-              totalQty: group.total_qty
+              totalQty: group.total_qty,
+              workstation: group.workstation
             };
           });
         } catch (e) { }
@@ -1641,17 +1713,23 @@ app.get('/api/schedule', async (req, res) => {
 
     const enrichedWorkOrders = workOrdersWithStation.map(wo => {
       const batchInfo = woToBatchMap[wo.name];
-      if (batchInfo) {
-        return { ...wo, _batchGroup: batchInfo };
+      const station = wo.workstation || (batchInfo && batchInfo.workstation) || woWorkstationMap[wo.name];
+      const enriched = { ...wo };
+      if (station) {
+        enriched.workstation = station;
+        woWorkstationMap[wo.name] = station;
       }
-      return wo;
+      if (batchInfo) {
+        enriched._batchGroup = batchInfo;
+      }
+      return enriched;
     });
 
     res.json({
       workstations: workstations,
       jobCards: jobCardsDetails.filter(Boolean),
       workOrders: enrichedWorkOrders,
-      batchGroups: [], // Migrated logic handles batch mapping via Virtual Work Orders
+      batchGroups: batchGroupsList,
       timers: loadTimers()
     });
   } catch (error) {

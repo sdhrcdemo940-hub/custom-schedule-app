@@ -1677,7 +1677,10 @@ const Scheduler = () => {
                                               status: e.extendedProps?.status || 'Draft'
                                             }));
 
-                                        const completedCount = subWOsList.filter(s => (s.status || '').toLowerCase() === 'completed').length;
+                                        const completedCount = subWOsList.filter(s => {
+                                          const t = woTimers[s.name];
+                                          return (s.status || '').toLowerCase() === 'completed' || t?.status === 'completed';
+                                        }).length;
                                         const pct = subWOsList.length > 0 ? Math.round((completedCount / subWOsList.length) * 100) : 0;
 
                                         const isGroupLocked = ['in process', 'completed'].includes((masterStatus || '').toLowerCase()) ||
@@ -1746,7 +1749,8 @@ const Scheduler = () => {
                                                   const t = woTimers[sub.name];
                                                   const timerStatus = t?.status || 'idle';
                                                   const totalSecs = getWOTimerSeconds(sub.name);
-                                                  const isCompleted = sub.status === 'Completed' || timerStatus === 'completed';
+                                                  const isCompleted = (sub.status || '').toLowerCase() === 'completed' || timerStatus === 'completed';
+                                                  const effectiveStatus = isCompleted ? 'Completed' : (timerStatus === 'running' ? 'In Process' : (sub.status || 'Draft'));
 
                                                   return (
                                                     <div
@@ -1755,15 +1759,15 @@ const Scheduler = () => {
                                                       onClick={(e) => { e.stopPropagation(); openDoc('workorder', sub.name); }}
                                                       title={`Click to open ${sub.name} in ERPNext`}
                                                     >
-                                                      <div className="sub-item-status-dot" style={{ backgroundColor: getStatusColorWO(sub.status) }}></div>
+                                                      <div className="sub-item-status-dot" style={{ backgroundColor: getStatusColorWO(effectiveStatus) }}></div>
                                                       <div className="sub-item-info">
                                                         <div className="sub-item-top-row">
                                                           <div className="sub-item-name-group">
                                                             <span className="matrix-sub-badge">#{sub.batchNumber}</span>
                                                             <span className="matrix-sub-wo">{sub.name}</span>
                                                           </div>
-                                                          <div className="sub-item-status-tag" style={{ color: getStatusColorWO(sub.status) }}>
-                                                            ● <span className="sub-status-text">{sub.status || 'Draft'}</span>
+                                                          <div className="sub-item-status-tag" style={{ color: getStatusColorWO(effectiveStatus) }}>
+                                                            ● <span className="sub-status-text">{effectiveStatus}</span>
                                                           </div>
                                                         </div>
 
