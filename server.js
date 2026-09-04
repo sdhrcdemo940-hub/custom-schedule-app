@@ -716,7 +716,7 @@ app.post('/api/work-orders/:id/start', async (req, res) => {
     const nowIso = new Date().toISOString();
     let woQty = 0;
 
-    // Check if WO is Draft in ERPNext and submit it
+    // Check if WO is Draft in ERPNext and submit it, then set status to In Process
     try {
       const woResp = await erpnextAPI.get(`/Work Order/${woId}`);
       const woData = woResp.data.data;
@@ -727,13 +727,14 @@ app.post('/api/work-orders/:id/start', async (req, res) => {
           await erpnextAPI.put(`/Work Order/${woId}`, { docstatus: 1 });
           console.log(`Submitted Draft Work Order ${woId} upon timer start`);
         }
-        // Update actual start date if not set
-        if (!woData.actual_start_date) {
-          const pad = n => String(n).padStart(2, '0');
-          const d = new Date();
-          const startStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-          await erpnextAPI.put(`/Work Order/${woId}`, { actual_start_date: startStr });
-        }
+        // Update actual start date and force status to In Process
+        const pad = n => String(n).padStart(2, '0');
+        const d = new Date();
+        const startStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        const startPayload = { status: 'In Process' };
+        if (!woData.actual_start_date) startPayload.actual_start_date = startStr;
+        await erpnextAPI.put(`/Work Order/${woId}`, startPayload);
+        console.log(`Set Work Order ${woId} status to 'In Process' in ERPNext`);
       }
     } catch (e) {
       console.warn(`Could not update ERPNext for WO ${woId} start:`, e.message);
@@ -798,7 +799,7 @@ app.post('/api/work-orders/:id/start', async (req, res) => {
 });
 
 // Pause Work Order Timer
-app.post('/api/work-orders/:id/pause', (req, res) => {
+app.post('/api/work-orders/:id/pause', async (req, res) => {
   const woId = req.params.id;
   try {
     const now = Date.now();
@@ -823,6 +824,14 @@ app.post('/api/work-orders/:id/pause', (req, res) => {
     saveTimers(timers);
     console.log(`⏸ Paused timer for Work Order ${woId} (Total elapsed: ${timer.elapsedSeconds}s)`);
 
+    // Update ERPNext WO status to Stopped (paused state)
+    try {
+      await erpnextAPI.put(`/Work Order/${woId}`, { status: 'Stopped' });
+      console.log(`Set Work Order ${woId} status to 'Stopped' in ERPNext (paused)`);
+    } catch (erpErr) {
+      console.warn(`Could not update ERPNext pause status for ${woId}:`, erpErr.message);
+    }
+
     res.json({ success: true, timer, message: `Work Order ${woId} paused` });
   } catch (error) {
     console.error('Error pausing WO timer:', error.message);
@@ -831,7 +840,7 @@ app.post('/api/work-orders/:id/pause', (req, res) => {
 });
 
 // Resume Work Order Timer
-app.post('/api/work-orders/:id/resume', (req, res) => {
+app.post('/api/work-orders/:id/resume', async (req, res) => {
   const woId = req.params.id;
   try {
     const now = Date.now();
@@ -848,6 +857,14 @@ app.post('/api/work-orders/:id/resume', (req, res) => {
 
     saveTimers(timers);
     console.log(`▶ Resumed timer for Work Order ${woId}`);
+
+    // Update ERPNext WO status back to In Process
+    try {
+      await erpnextAPI.put(`/Work Order/${woId}`, { status: 'In Process' });
+      console.log(`Set Work Order ${woId} status back to 'In Process' in ERPNext (resumed)`);
+    } catch (erpErr) {
+      console.warn(`Could not update ERPNext resume status for ${woId}:`, erpErr.message);
+    }
 
     res.json({ success: true, timer, message: `Work Order ${woId} resumed` });
   } catch (error) {

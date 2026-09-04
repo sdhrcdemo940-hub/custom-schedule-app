@@ -630,7 +630,7 @@ const Scheduler = () => {
     const ext = event?.extendedProps || event;
     if (ext?.type !== 'workorder') return false;
     const status = (ext?.status || '').trim();
-    return status === 'In Process' || status === 'Completed';
+    return status === 'In Process' || status === 'Completed' || status === 'Stopped';
   };
 
   const formatDateTimeLocal = (date) => {
