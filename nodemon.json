@@ -1,4 +1,9 @@
 {
-  "watch": ["server.js"],
-  "ignore": ["*.json", "frontend/*", "scratch/*", "*.log"]
+  "ignore": [
+    "wo-timers.json",
+    "batch-groups.json",
+    "*.log",
+    "frontend/**"
+  ],
+  "ext": "js"
 }
