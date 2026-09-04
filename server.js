@@ -731,10 +731,23 @@ app.post('/api/work-orders/:id/start', async (req, res) => {
         const pad = n => String(n).padStart(2, '0');
         const d = new Date();
         const startStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-        const startPayload = { status: 'In Process' };
+        const startPayload = {};
         if (!woData.actual_start_date) startPayload.actual_start_date = startStr;
-        await erpnextAPI.put(`/Work Order/${woId}`, startPayload);
-        console.log(`Set Work Order ${woId} status to 'In Process' in ERPNext`);
+        if (Object.keys(startPayload).length > 0) {
+          await erpnextAPI.put(`/Work Order/${woId}`, startPayload);
+        }
+        // Use frappe.client.set_value to update status field (computed field, requires method API)
+        try {
+          await erpnextMethodAPI.post('/frappe.client.set_value', {
+            doctype: 'Work Order',
+            name: woId,
+            fieldname: 'status',
+            value: 'In Process'
+          });
+          console.log(`Set Work Order ${woId} status to 'In Process' in ERPNext`);
+        } catch (statusErr) {
+          console.warn(`Could not set status via frappe.client.set_value for ${woId}:`, statusErr.message);
+        }
       }
     } catch (e) {
       console.warn(`Could not update ERPNext for WO ${woId} start:`, e.message);
@@ -824,9 +837,14 @@ app.post('/api/work-orders/:id/pause', async (req, res) => {
     saveTimers(timers);
     console.log(`⏸ Paused timer for Work Order ${woId} (Total elapsed: ${timer.elapsedSeconds}s)`);
 
-    // Update ERPNext WO status to Stopped (paused state)
+    // Update ERPNext WO status to Stopped using the proper Frappe method
     try {
-      await erpnextAPI.put(`/Work Order/${woId}`, { status: 'Stopped' });
+      await erpnextMethodAPI.post('/frappe.client.set_value', {
+        doctype: 'Work Order',
+        name: woId,
+        fieldname: 'status',
+        value: 'Stopped'
+      });
       console.log(`Set Work Order ${woId} status to 'Stopped' in ERPNext (paused)`);
     } catch (erpErr) {
       console.warn(`Could not update ERPNext pause status for ${woId}:`, erpErr.message);
@@ -858,9 +876,14 @@ app.post('/api/work-orders/:id/resume', async (req, res) => {
     saveTimers(timers);
     console.log(`▶ Resumed timer for Work Order ${woId}`);
 
-    // Update ERPNext WO status back to In Process
+    // Update ERPNext WO status back to In Process using the proper Frappe method
     try {
-      await erpnextAPI.put(`/Work Order/${woId}`, { status: 'In Process' });
+      await erpnextMethodAPI.post('/frappe.client.set_value', {
+        doctype: 'Work Order',
+        name: woId,
+        fieldname: 'status',
+        value: 'In Process'
+      });
       console.log(`Set Work Order ${woId} status back to 'In Process' in ERPNext (resumed)`);
     } catch (erpErr) {
       console.warn(`Could not update ERPNext resume status for ${woId}:`, erpErr.message);
