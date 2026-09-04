@@ -397,5 +397,36 @@
     "workstation": "PMX-102-MOLTENI",
     "createdAt": "2026-09-03T03:22:17.386Z",
     "failedBatches": []
+  },
+  "BWO-2026-00014": {
+    "id": "BWO-2026-00014",
+    "masterWO": null,
+    "isVirtualMaster": true,
+    "subWOs": [
+      {
+        "name": "MFG-WO-2026-00108",
+        "batchNumber": 1,
+        "status": "Completed"
+      },
+      {
+        "name": "MFG-WO-2026-00109",
+        "batchNumber": 2,
+        "status": "Completed"
+      },
+      {
+        "name": "MFG-WO-2026-00110",
+        "batchNumber": 3,
+        "status": "Draft"
+      }
+    ],
+    "batchCount": 3,
+    "productionItem": "7317TMG",
+    "bomNo": "BOM-7317TMG-001",
+    "qtyPerBatch": 440,
+    "totalQty": 1320,
+    "plannedDate": "2026-09-02",
+    "workstation": "PMX-102-MOLTENI",
+    "createdAt": "2026-09-03T09:46:31.784Z",
+    "failedBatches": []
   }
 }

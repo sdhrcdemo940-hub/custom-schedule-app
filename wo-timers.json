@@ -405,5 +405,46 @@
     "resumedAt": "2026-09-03T09:07:46.676Z",
     "finishedAt": "2026-09-03T09:07:49.051Z",
     "manufactureStockEntry": null
+  },
+  "MFG-WO-2026-00108": {
+    "id": "MFG-WO-2026-00108",
+    "status": "completed",
+    "startTime": "2026-09-03T09:47:16.773Z",
+    "lastIntervalStart": null,
+    "elapsedSeconds": 16,
+    "intervals": [
+      {
+        "start": 1788428836773,
+        "end": 1788428852269,
+        "duration": 15
+      },
+      {
+        "start": 1788428854861,
+        "end": 1788428856603,
+        "duration": 1
+      }
+    ],
+    "transferStockEntry": "MAT-STE-2026-00089",
+    "pausedAt": "2026-09-03T09:47:32.270Z",
+    "resumedAt": "2026-09-03T09:47:34.861Z",
+    "finishedAt": "2026-09-03T09:47:36.603Z",
+    "manufactureStockEntry": "MAT-STE-2026-00090"
+  },
+  "MFG-WO-2026-00109": {
+    "id": "MFG-WO-2026-00109",
+    "status": "completed",
+    "startTime": "2026-09-03T09:47:39.818Z",
+    "lastIntervalStart": null,
+    "elapsedSeconds": 7,
+    "intervals": [
+      {
+        "start": 1788428859818,
+        "end": 1788428867514,
+        "duration": 7
+      }
+    ],
+    "transferStockEntry": "MAT-STE-2026-00091",
+    "finishedAt": "2026-09-03T09:47:47.514Z",
+    "manufactureStockEntry": "MAT-STE-2026-00092"
   }
 }
