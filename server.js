@@ -618,38 +618,89 @@ const performMaterialTransfer = async (woId, qty) => {
 const performManufactureEntry = async (woId, qty, elapsedSeconds) => {
   await cleanDraftStockEntries(woId);
 
-  // Step 1: Complete any pending Job Cards
+  // Step 0: Ensure Raw Materials are transferred to WIP Warehouse first
+  try {
+    await performMaterialTransfer(woId, qty);
+  } catch (transferErr) {
+    console.warn(`Material transfer before manufacture warning for ${woId}:`, transferErr.message);
+  }
+
+  // Step 1: Complete any pending Job Cards using 2-step REST API process with sequential time offsets
   try {
     const jcList = await erpnextAPI.get('/Job Card', {
       params: {
         fields: JSON.stringify(['name', 'for_quantity', 'docstatus']),
-        filters: JSON.stringify([['work_order', '=', woId], ['docstatus', '!=', 2]])
+        filters: JSON.stringify([['work_order', '=', woId], ['docstatus', '=', 0]])
       }
     });
 
     const pad = n => String(n).padStart(2, '0');
-    const d = new Date();
-    const nowStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    const baseNow = Date.now();
     const durationMins = Math.max(1, Math.ceil((elapsedSeconds || 900) / 60));
+    let jcIdx = 0;
 
     for (const jc of (jcList.data.data || [])) {
-      if (jc.docstatus === 0) {
+      try {
+        const jcFull = await erpnextAPI.get(`/Job Card/${jc.name}`);
+        const jcData = jcFull.data.data;
+        const existingLogs = Array.isArray(jcData.time_logs) ? jcData.time_logs : [];
+        const targetQty = jcData.for_quantity || qty || 1;
+
+        // Offset timestamps by jcIdx * (duration + 1) minutes to strictly prevent OverlapError
+        const startTime = new Date(baseNow + jcIdx * (durationMins + 1) * 60000);
+        const endTime = new Date(startTime.getTime() + durationMins * 60000);
+        jcIdx++;
+
+        const fromStr = `${startTime.getFullYear()}-${pad(startTime.getMonth() + 1)}-${pad(startTime.getDate())} ${pad(startTime.getHours())}:${pad(startTime.getMinutes())}:${pad(startTime.getSeconds())}`;
+        const toStr = `${endTime.getFullYear()}-${pad(endTime.getMonth() + 1)}-${pad(endTime.getDate())} ${pad(endTime.getHours())}:${pad(endTime.getMinutes())}:${pad(endTime.getSeconds())}`;
+
+        // Step A: Add time log
         await erpnextAPI.put(`/Job Card/${jc.name}`, {
-          docstatus: 1,
           time_logs: [
+            ...existingLogs,
             {
-              from_time: nowStr,
-              to_time: nowStr,
+              from_time: fromStr,
+              to_time: toStr,
               time_in_mins: durationMins,
-              completed_qty: jc.for_quantity || qty || 1
+              completed_qty: targetQty
             }
           ]
         });
-        console.log(`✓ Completed Job Card ${jc.name} for WO ${woId}`);
+
+        // Step B: Submit Job Card
+        await erpnextAPI.put(`/Job Card/${jc.name}`, { docstatus: 1 });
+        console.log(`✓ Auto-completed & submitted Job Card ${jc.name} for WO ${woId}`);
+      } catch (jcSingleErr) {
+        console.warn(`Could not auto-complete Job Card ${jc.name}:`, jcSingleErr.message);
       }
     }
   } catch (jcErr) {
     console.warn(`Job card auto-completion warning for WO ${woId}:`, jcErr.message);
+  }
+
+  // Step 1.5: Verify WO status and produced_qty
+  try {
+    const woResp = await erpnextAPI.get(`/Work Order/${woId}`);
+    const woData = woResp.data ? woResp.data.data : null;
+    if (woData) {
+      if (woData.status === 'Completed' || (woData.qty > 0 && woData.produced_qty >= woData.qty)) {
+        console.log(`Work Order ${woId} is already fully manufactured (${woData.produced_qty}/${woData.qty})`);
+        return 'ALREADY_MANUFACTURED';
+      }
+      if (woData.status === 'Stopped') {
+        console.log(`Work Order ${woId} is Stopped in ERPNext. Un-stopping (Resuming) before manufacturing...`);
+        try {
+          await erpnextMethodAPI.post('/erpnext.manufacturing.doctype.work_order.work_order.stop_unstop', {
+            work_order: woId,
+            status: 'Resumed'
+          });
+        } catch (unstopErr) {
+          console.warn(`Un-stop attempt for ${woId} warning:`, unstopErr.message);
+        }
+      }
+    }
+  } catch (woErr) {
+    console.warn(`Work Order check before manufacture warning for ${woId}:`, woErr.message);
   }
 
   // Step 2: Make and Submit Manufacture Stock Entry
@@ -660,10 +711,16 @@ const performManufactureEntry = async (woId, qty, elapsedSeconds) => {
         purpose: 'Manufacture',
         qty: qty || undefined
       });
-      const steDoc = prep.data.message;
+      const steDoc = prep.data ? prep.data.message : null;
       if (!steDoc || !Array.isArray(steDoc.items) || steDoc.items.length === 0) {
-        console.log(`No manufacture items generated for Work Order ${woId} (possibly already manufactured)`);
-        return 'ALREADY_MANUFACTURED';
+        // Re-check if it was actually manufactured
+        const finalWoResp = await erpnextAPI.get(`/Work Order/${woId}`);
+        const finalWoData = finalWoResp.data ? finalWoResp.data.data : null;
+        if (finalWoData && (finalWoData.status === 'Completed' || (finalWoData.qty > 0 && finalWoData.produced_qty >= finalWoData.qty))) {
+          return 'ALREADY_MANUFACTURED';
+        }
+        console.warn(`No manufacture stock entry items generated for Work Order ${woId}`);
+        return null;
       }
 
       steDoc.items.forEach(item => {
@@ -909,11 +966,16 @@ app.post('/api/work-orders/:id/finish', async (req, res) => {
       timer.intervals.push({ start: timer.lastIntervalStart, end: now, duration: added });
     }
 
-    timer.status = 'completed';
-    timer.lastIntervalStart = null;
-    timer.finishedAt = nowIso;
+    // 1. Un-stop Work Order if it is currently Stopped in ERPNext so manufacturing stock entry can be submitted
+    try {
+      await erpnextMethodAPI.post('/erpnext.manufacturing.doctype.work_order.work_order.stop_unstop', {
+        work_order: woId,
+        status: 'Resumed'
+      });
+      console.log(`Un-stopped Work Order ${woId} in ERPNext before manufacturing`);
+    } catch (e) {}
 
-    // Fetch Work Order qty
+    // 2. Fetch Work Order qty
     try {
       const woResp = await erpnextAPI.get(`/Work Order/${woId}`);
       if (woResp.data.data) {
@@ -923,12 +985,13 @@ app.post('/api/work-orders/:id/finish', async (req, res) => {
       console.warn(`Could not fetch WO qty for ${woId}:`, e.message);
     }
 
-    // Manufacture in ERPNext: consumes WIP, produces Finished Good into FG Warehouse
+    // 3. Manufacture in ERPNext: consumes WIP, produces Finished Good into FG Warehouse
     const manufactureEntry = await performManufactureEntry(woId, woQty, timer.elapsedSeconds);
-    timer.manufactureStockEntry = manufactureEntry || null;
-    saveTimers(timers);
+    if (!manufactureEntry) {
+      throw new Error(`Failed to create or submit Manufacture Stock Entry for Work Order ${woId} in ERPNext.`);
+    }
 
-    // Update actual end date and Completed status in ERPNext
+    // 4. Update actual end date and Completed status in ERPNext
     try {
       const pad = n => String(n).padStart(2, '0');
       const d = new Date();
@@ -937,7 +1000,15 @@ app.post('/api/work-orders/:id/finish', async (req, res) => {
       console.log(`Updated Work Order ${woId} as Completed in ERPNext`);
     } catch (erpErr) {
       console.warn(`Could not update ERPNext completion for ${woId}:`, erpErr.message);
+      throw new Error(`Failed to update Work Order status to Completed in ERPNext: ${erpErr.message}`);
     }
+
+    // 5. Only mark timer as completed and save after ERPNext completion succeeds
+    timer.status = 'completed';
+    timer.lastIntervalStart = null;
+    timer.finishedAt = nowIso;
+    timer.manufactureStockEntry = manufactureEntry;
+    saveTimers(timers);
 
     // Update batch groups status in ERPNext if belongs to batch group
     try {
@@ -966,7 +1037,7 @@ app.post('/api/work-orders/:id/finish', async (req, res) => {
       console.warn('Batch group status update warning:', bgErr.message);
     }
 
-    console.log(`⏹ Finished timer for Work Order ${woId} (Manufacture: ${manufactureEntry || 'None'})`);
+    console.log(`⏹ Finished timer for Work Order ${woId} (Manufacture: ${manufactureEntry})`);
 
     res.json({
       success: true,
@@ -1176,37 +1247,46 @@ app.post('/api/job-cards/:id/finish', async (req, res) => {
       timer.intervals.push({ start: timer.lastIntervalStart, end: now, duration: added });
     }
 
-    timer.status = 'completed';
-    timer.lastIntervalStart = null;
-    timer.finishedAt = nowIso;
-
-    saveTimers(timers);
-
-    // Update ERPNext Job Card status to 'Completed' and set actual_end_date
+    // Update ERPNext Job Card to 'Completed' by adding time log then submitting
     try {
       const pad = n => String(n).padStart(2, '0');
       const d = new Date();
       const endStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      const durationMins = Math.max(1, Math.ceil((timer.elapsedSeconds || 900) / 60));
 
-      await erpnextMethodAPI.post('/frappe.client.set_value', {
-        doctype: 'Job Card',
-        name: jcId,
-        fieldname: 'status',
-        value: 'Completed'
-      });
-      try {
-        await erpnextMethodAPI.post('/frappe.client.set_value', {
-          doctype: 'Job Card',
-          name: jcId,
-          fieldname: 'actual_end_date',
-          value: endStr
+      const jcDataResp = await erpnextAPI.get(`/Job Card/${jcId}`);
+      const jcData = jcDataResp.data.data;
+      if (jcData.docstatus === 0) {
+        const existingLogs = Array.isArray(jcData.time_logs) ? jcData.time_logs : [];
+        const completedQty = jcData.for_quantity || 1;
+
+        // Step A: Add time log
+        await erpnextAPI.put(`/Job Card/${jcId}`, {
+          time_logs: [
+            ...existingLogs,
+            {
+              from_time: endStr,
+              to_time: endStr,
+              time_in_mins: durationMins,
+              completed_qty: completedQty
+            }
+          ]
         });
-      } catch (e) {}
 
-      console.log(`Set Job Card ${jcId} status to 'Completed' in ERPNext`);
+        // Step B: Submit Job Card
+        await erpnextAPI.put(`/Job Card/${jcId}`, { docstatus: 1 });
+      }
+
+      console.log(`Set Job Card ${jcId} status to 'Completed' in ERPNext by submitting it`);
     } catch (erpErr) {
       console.warn(`Could not update ERPNext completion for Job Card ${jcId}:`, parseERPNextError(erpErr));
+      throw new Error(`Failed to complete Job Card in ERPNext: ${parseERPNextError(erpErr)}`);
     }
+
+    timer.status = 'completed';
+    timer.lastIntervalStart = null;
+    timer.finishedAt = nowIso;
+    saveTimers(timers);
 
     console.log(`⏹ Completed Job Card ${jcId}`);
 
