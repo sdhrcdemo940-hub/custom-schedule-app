@@ -165,7 +165,7 @@ app.get('/api/job-cards/:id', async (req, res) => {
   }
 });
 
-const updateJobCardSchedule = async (jobCardId, from_time, to_time) => {
+const updateJobCardSchedule = async (jobCardId, from_time, to_time, newWorkstation) => {
   // Fetch the Job Card so we can update the scheduled_time_logs child row if present.
   const jobCardResponse = await erpnextAPI.get(`/Job Card/${jobCardId}`);
   const jobCard = jobCardResponse.data.data;
@@ -186,7 +186,21 @@ const updateJobCardSchedule = async (jobCardId, from_time, to_time) => {
     payload.to_time = to_time;
   }
 
-  return erpnextAPI.put(`/Job Card/${jobCardId}`, payload);
+  if (newWorkstation && newWorkstation !== 'Unassigned') {
+    payload.workstation = newWorkstation;
+  }
+
+  try {
+    return await erpnextAPI.put(`/Job Card/${jobCardId}`, payload);
+  } catch (err) {
+    const errStr = JSON.stringify(err.response ? err.response.data : err.message);
+    if (errStr.includes('LinkValidationError') && errStr.includes('Workstation')) {
+      // If the old workstation is invalid/deleted in ERPNext, clear it and retry
+      payload.workstation = '';
+      return await erpnextAPI.put(`/Job Card/${jobCardId}`, payload);
+    }
+    throw err;
+  }
 };
 
 // Update Job Card dates (reschedule)
@@ -765,102 +779,115 @@ const performManufactureEntry = async (woId, qty, elapsedSeconds) => {
   return null;
 };
 
+// ── Shared helper: start a Work Order timer (submit if Draft, transfer RM, set In Process) ──
+// Returns { timer, transferStockEntry } or throws on error.
+// Safe to call even if the WO is already running — will skip if status is running/completed.
+const startWorkOrderTimer = async (woId) => {
+  const now = Date.now();
+  const nowIso = new Date().toISOString();
+  let woQty = 0;
+
+  // Check existing timer — skip if already running or completed
+  const timers = loadTimers();
+  const existingTimer = timers[woId];
+  if (existingTimer && (existingTimer.status === 'running' || existingTimer.status === 'completed')) {
+    return { timer: existingTimer, transferStockEntry: existingTimer.transferStockEntry || null, alreadyRunning: true };
+  }
+
+  // Fetch WO from ERPNext and handle Draft / Stopped states
+  try {
+    const woResp = await erpnextAPI.get(`/Work Order/${woId}`);
+    const woData = woResp.data.data;
+    if (woData) {
+      woQty = woData.qty || woData.for_quantity || 0;
+      if (woData.docstatus === 0) {
+        await erpnextAPI.put(`/Work Order/${woId}`, { docstatus: 1 });
+        console.log(`Submitted Draft Work Order ${woId} upon timer start`);
+      }
+      const pad = n => String(n).padStart(2, '0');
+      const d = new Date();
+      const startStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      const startPayload = {};
+      if (!woData.actual_start_date) startPayload.actual_start_date = startStr;
+      if (Object.keys(startPayload).length > 0) {
+        await erpnextAPI.put(`/Work Order/${woId}`, startPayload);
+      }
+      try {
+        if (woData.status === 'Stopped') {
+          await erpnextMethodAPI.post('/erpnext.manufacturing.doctype.work_order.work_order.stop_unstop', {
+            work_order: woId,
+            status: 'Resumed'
+          });
+          console.log(`Resumed Stopped Work Order ${woId} in ERPNext on start`);
+        }
+      } catch (statusErr) {
+        console.warn(`Could not unstop Work Order ${woId} on start:`, parseERPNextError(statusErr));
+      }
+    }
+  } catch (e) {
+    console.warn(`Could not update ERPNext for WO ${woId} start:`, e.message);
+  }
+
+  // Transfer Raw Materials from Stores to WIP Warehouse
+  const transferEntry = await performMaterialTransfer(woId, woQty);
+
+  // Update batch groups status if belongs to batch group
+  try {
+    const vwoList = await erpnextAPI.get('/Virtual Work Order', {
+      params: {
+        fields: JSON.stringify(['name']),
+        filters: JSON.stringify([['docstatus', '!=', 2]]),
+        limit_page_length: 500
+      }
+    });
+    for (const vwo of (vwoList.data.data || [])) {
+      const fullVwo = await erpnextAPI.get(`/Virtual Work Order/${vwo.name}`);
+      const data = fullVwo.data.data;
+      let updatedGroup = false;
+      (data.sub_wos || []).forEach(sub => {
+        if (sub.sub_wo === woId) {
+          sub.status = 'In Process';
+          updatedGroup = true;
+        }
+      });
+      if (updatedGroup) {
+        await erpnextAPI.put(`/Virtual Work Order/${vwo.name}`, { sub_wos: data.sub_wos });
+      }
+    }
+  } catch (bgErr) {
+    console.warn('Batch group status update warning:', bgErr.message);
+  }
+
+  // Save timer
+  const freshTimers = loadTimers();
+  const existing = freshTimers[woId] || { elapsedSeconds: 0 };
+  freshTimers[woId] = {
+    id: woId,
+    status: 'running',
+    startTime: existing.startTime || nowIso,
+    lastIntervalStart: now,
+    elapsedSeconds: existing.elapsedSeconds || 0,
+    intervals: existing.intervals || [],
+    transferStockEntry: transferEntry || existing.transferStockEntry || null
+  };
+  saveTimers(freshTimers);
+  console.log(`⏱ Started timer for Work Order ${woId} (Transfer: ${transferEntry || 'None'})`);
+
+  return { timer: freshTimers[woId], transferStockEntry: transferEntry };
+};
+
 // Start Work Order Timer & Transfer RM to WIP
 app.post('/api/work-orders/:id/start', async (req, res) => {
   const woId = req.params.id;
   try {
-    const now = Date.now();
-    const nowIso = new Date().toISOString();
-    let woQty = 0;
-
-    // Check if WO is Draft in ERPNext and submit it, then set status to In Process
-    try {
-      const woResp = await erpnextAPI.get(`/Work Order/${woId}`);
-      const woData = woResp.data.data;
-      if (woData) {
-        woQty = woData.qty || woData.for_quantity || 0;
-        if (woData.docstatus === 0) {
-          // Submit the Draft Work Order
-          await erpnextAPI.put(`/Work Order/${woId}`, { docstatus: 1 });
-          console.log(`Submitted Draft Work Order ${woId} upon timer start`);
-        }
-        // Update actual start date and force status to In Process
-        const pad = n => String(n).padStart(2, '0');
-        const d = new Date();
-        const startStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-        const startPayload = {};
-        if (!woData.actual_start_date) startPayload.actual_start_date = startStr;
-        if (Object.keys(startPayload).length > 0) {
-          await erpnextAPI.put(`/Work Order/${woId}`, startPayload);
-        }
-        // If WO is Stopped, resume it in ERPNext
-        try {
-          if (woData.status === 'Stopped') {
-            await erpnextMethodAPI.post('/erpnext.manufacturing.doctype.work_order.work_order.stop_unstop', {
-              work_order: woId,
-              status: 'Resumed'
-            });
-            console.log(`Resumed Stopped Work Order ${woId} in ERPNext on start`);
-          }
-        } catch (statusErr) {
-          console.warn(`Could not unstop Work Order ${woId} on start:`, parseERPNextError(statusErr));
-        }
-      }
-    } catch (e) {
-      console.warn(`Could not update ERPNext for WO ${woId} start:`, e.message);
-    }
-
-    // Transfer Raw Materials from Stores to WIP Warehouse in ERPNext
-    const transferEntry = await performMaterialTransfer(woId, woQty);
-
-    // Update batch groups status in ERPNext if belongs to batch group
-    try {
-      const vwoList = await erpnextAPI.get('/Virtual Work Order', {
-        params: {
-          fields: JSON.stringify(['name']),
-          filters: JSON.stringify([['docstatus', '!=', 2]]),
-          limit_page_length: 500
-        }
-      });
-      for (const vwo of (vwoList.data.data || [])) {
-        const fullVwo = await erpnextAPI.get(`/Virtual Work Order/${vwo.name}`);
-        const data = fullVwo.data.data;
-        let updatedGroup = false;
-        (data.sub_wos || []).forEach(sub => {
-          if (sub.sub_wo === woId) {
-            sub.status = 'In Process';
-            updatedGroup = true;
-          }
-        });
-        if (updatedGroup) {
-          await erpnextAPI.put(`/Virtual Work Order/${vwo.name}`, { sub_wos: data.sub_wos });
-        }
-      }
-    } catch (bgErr) {
-      console.warn('Batch group status update warning:', bgErr.message);
-    }
-
-    const timers = loadTimers();
-    const existing = timers[woId] || { elapsedSeconds: 0 };
-
-    timers[woId] = {
-      id: woId,
-      status: 'running',
-      startTime: existing.startTime || nowIso,
-      lastIntervalStart: now,
-      elapsedSeconds: existing.elapsedSeconds || 0,
-      intervals: existing.intervals || [],
-      transferStockEntry: transferEntry || existing.transferStockEntry || null
-    };
-
-    saveTimers(timers);
-    console.log(`⏱ Started timer for Work Order ${woId} (Transfer: ${transferEntry || 'None'})`);
-
+    const result = await startWorkOrderTimer(woId);
     res.json({
       success: true,
-      timer: timers[woId],
-      transferStockEntry: transferEntry,
-      message: `Work Order ${woId} started. Raw materials transferred to WIP.`
+      timer: result.timer,
+      transferStockEntry: result.transferStockEntry,
+      message: result.alreadyRunning
+        ? `Work Order ${woId} is already running.`
+        : `Work Order ${woId} started. Raw materials transferred to WIP.`
     });
   } catch (error) {
     console.error('Error starting WO timer:', error.message);
@@ -1096,6 +1123,7 @@ app.post('/api/job-cards/:id/start', async (req, res) => {
     const timers = loadTimers();
     const existing = timers[jcId] || { elapsedSeconds: 0 };
 
+    // Start Job Card timer
     timers[jcId] = {
       id: jcId,
       type: 'jobcard',
@@ -1110,10 +1138,16 @@ app.post('/api/job-cards/:id/start', async (req, res) => {
     console.log(`⏱ Started timer for Job Card ${jcId}`);
 
     // Update Job Card status to 'Work In Progress' in ERPNext
+    let parentWorkOrder = null;
     try {
       const pad = n => String(n).padStart(2, '0');
       const d = new Date();
       const startStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+      // Fetch Job Card to get parent work_order
+      const jcResp = await erpnextAPI.get(`/Job Card/${jcId}`);
+      const jcData = jcResp.data.data;
+      parentWorkOrder = jcData ? jcData.work_order : null;
 
       await erpnextMethodAPI.post('/frappe.client.set_value', {
         doctype: 'Job Card',
@@ -1135,10 +1169,38 @@ app.post('/api/job-cards/:id/start', async (req, res) => {
       console.warn(`Could not update ERPNext status for Job Card ${jcId}:`, parseERPNextError(erpErr));
     }
 
+    // ── Auto-start parent Work Order if it has one and isn't already running/completed ──
+    let woTimer = null;
+    let woTransferEntry = null;
+    let woAutoStarted = false;
+    if (parentWorkOrder) {
+      try {
+        console.log(`🔗 Job Card ${jcId} belongs to WO ${parentWorkOrder} — auto-starting WO timer...`);
+        const woResult = await startWorkOrderTimer(parentWorkOrder);
+        woTimer = woResult.timer;
+        woTransferEntry = woResult.transferStockEntry;
+        woAutoStarted = !woResult.alreadyRunning;
+        console.log(woResult.alreadyRunning
+          ? `ℹ️  WO ${parentWorkOrder} was already running, skipped duplicate start`
+          : `✅ Auto-started WO ${parentWorkOrder} timer (Transfer: ${woTransferEntry || 'None'})`);
+      } catch (woErr) {
+        console.warn(`⚠️  Could not auto-start parent WO ${parentWorkOrder}:`, woErr.message);
+      }
+    }
+
+    // Reload timers to get latest JC timer (after WO start may have re-saved)
+    const finalTimers = loadTimers();
+
     res.json({
       success: true,
-      timer: timers[jcId],
-      message: `Job Card ${jcId} started.`
+      timer: finalTimers[jcId],
+      workOrder: parentWorkOrder || null,
+      woTimer: woTimer,
+      woTransferEntry: woTransferEntry,
+      woAutoStarted: woAutoStarted,
+      message: parentWorkOrder
+        ? `Job Card ${jcId} started. Parent WO ${parentWorkOrder} ${woAutoStarted ? 'auto-started' : 'was already running'}.`
+        : `Job Card ${jcId} started.`
     });
   } catch (error) {
     console.error('Error starting Job Card timer:', error.message);
@@ -1753,7 +1815,7 @@ const syncRescheduleWorkOrder = async (workOrderId, planned_start_date, planned_
   try {
     const jcListResp = await erpnextAPI.get('/Job Card', {
       params: {
-        fields: JSON.stringify(['name', 'from_time', 'to_time', 'docstatus']),
+        fields: JSON.stringify(['name']),
         filters: JSON.stringify([
           ['work_order', '=', workOrderId],
           ['docstatus', '!=', 2]
@@ -1764,29 +1826,11 @@ const syncRescheduleWorkOrder = async (workOrderId, planned_start_date, planned_
 
     const jobCards = jcListResp.data.data || [];
     if (jobCards.length > 0) {
-      const targetStart = new Date(planned_start_date.replace(' ', 'T'));
-      const targetEnd = new Date((planned_end_date || planned_start_date).replace(' ', 'T'));
+      let fromTimeStr = `${planned_start_date.split(' ')[0]} 08:00:00`;
+      let toTimeStr = `${(planned_end_date || planned_start_date).split(' ')[0]} 17:00:00`;
 
       for (const jc of jobCards) {
         try {
-          // Calculate duration of existing job card or default to full day / shift
-          let fromTimeStr = `${planned_start_date.split(' ')[0]} 08:00:00`;
-          let toTimeStr = `${(planned_end_date || planned_start_date).split(' ')[0]} 17:00:00`;
-
-          if (jc.from_time && jc.to_time) {
-            const originalStart = new Date(jc.from_time.replace(' ', 'T'));
-            const originalEnd = new Date(jc.to_time.replace(' ', 'T'));
-            const durationMs = originalEnd.getTime() - originalStart.getTime();
-
-            const newStart = new Date(targetStart);
-            newStart.setHours(originalStart.getHours(), originalStart.getMinutes(), originalStart.getSeconds());
-            const newEnd = new Date(newStart.getTime() + Math.max(durationMs, 30 * 60 * 1000));
-
-            const pad = (n) => String(n).padStart(2, '0');
-            fromTimeStr = `${newStart.getFullYear()}-${pad(newStart.getMonth() + 1)}-${pad(newStart.getDate())} ${pad(newStart.getHours())}:${pad(newStart.getMinutes())}:${pad(newStart.getSeconds())}`;
-            toTimeStr = `${newEnd.getFullYear()}-${pad(newEnd.getMonth() + 1)}-${pad(newEnd.getDate())} ${pad(newEnd.getHours())}:${pad(newEnd.getMinutes())}:${pad(newEnd.getSeconds())}`;
-          }
-
           await updateJobCardSchedule(jc.name, fromTimeStr, toTimeStr);
           if (workstation && workstation !== 'Unassigned') {
             await erpnextAPI.put(`/Job Card/${jc.name}`, { workstation });
@@ -1815,39 +1859,14 @@ const syncRescheduleJobCard = async (jobCardId, from_time, to_time) => {
   const workOrderId = updatedJC.work_order;
   if (workOrderId) {
     try {
-      const jcListResp = await erpnextAPI.get('/Job Card', {
-        params: {
-          fields: JSON.stringify(['name', 'from_time', 'to_time', 'docstatus']),
-          filters: JSON.stringify([
-            ['work_order', '=', workOrderId],
-            ['docstatus', '!=', 2]
-          ]),
-          limit_page_length: 50
-        }
+      const minDateStr = from_time.split(' ')[0];
+      const maxDateStr = (to_time || from_time).split(' ')[0];
+
+      const woPut = await erpnextAPI.put(`/Work Order/${workOrderId}`, {
+        planned_start_date: minDateStr,
+        planned_end_date: maxDateStr
       });
-
-      const jobCards = jcListResp.data.data || [];
-      const validDates = [];
-      jobCards.forEach(j => {
-        const f = j.name === jobCardId ? from_time : j.from_time;
-        const t = j.name === jobCardId ? to_time : j.to_time;
-        if (f) validDates.push(new Date(f.replace(' ', 'T')));
-        if (t) validDates.push(new Date(t.replace(' ', 'T')));
-      });
-
-      if (validDates.length > 0) {
-        const minDate = new Date(Math.min(...validDates.map(d => d.getTime())));
-        const maxDate = new Date(Math.max(...validDates.map(d => d.getTime())));
-        const pad = (n) => String(n).padStart(2, '0');
-        const minDateStr = `${minDate.getFullYear()}-${pad(minDate.getMonth() + 1)}-${pad(minDate.getDate())}`;
-        const maxDateStr = `${maxDate.getFullYear()}-${pad(maxDate.getMonth() + 1)}-${pad(maxDate.getDate())}`;
-
-        const woPut = await erpnextAPI.put(`/Work Order/${workOrderId}`, {
-          planned_start_date: minDateStr,
-          planned_end_date: maxDateStr
-        });
-        updatedWO = woPut.data.data;
-      }
+      updatedWO = woPut.data.data;
     } catch (woErr) {
       console.warn(`Could not sync parent Work Order ${workOrderId}:`, woErr.message);
     }

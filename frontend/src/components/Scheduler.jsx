@@ -626,11 +626,13 @@ const Scheduler = () => {
   };
 
   // ── Job Card Action Handlers (Start, Pause/Stop, Resume, Finish, Cancel) ──
+
   const handleStartJCTimer = async (jcName, e) => {
     if (e) e.stopPropagation();
     const now = Date.now();
     const previousTimer = woTimers[jcName];
 
+    // 1. Optimistic update for the Job Card timer
     setWoTimers(prev => ({
       ...prev,
       [jcName]: {
@@ -639,7 +641,7 @@ const Scheduler = () => {
         status: 'running',
         startTime: prev[jcName]?.startTime || new Date().toISOString(),
         lastIntervalStart: now,
-        elapsedSeconds: (prev[jcName]?.elapsedSeconds || 0),
+        elapsedSeconds: prev[jcName]?.elapsedSeconds || 0,
         intervals: prev[jcName]?.intervals || []
       }
     }));
@@ -648,8 +650,21 @@ const Scheduler = () => {
       const resp = await fetch(`${API_URL}/job-cards/${encodeURIComponent(jcName)}/start`, { method: 'POST' });
       const data = await resp.json();
       if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to start Job Card');
+
+      // Update JC timer from server response
       setWoTimers(prev => ({ ...prev, [jcName]: data.timer }));
-      showToast(`▶ Started Job Card ${jcName}`);
+
+      // If server auto-started the parent WO, update WO timer too
+      if (data.woTimer && data.workOrder) {
+        setWoTimers(prev => ({ ...prev, [data.workOrder]: data.woTimer }));
+        const transferNote = data.woTransferEntry ? ` [Transfer: ${data.woTransferEntry}]` : '';
+        showToast(`▶ Started JC ${jcName} → WO ${data.workOrder} auto-started${transferNote}`);
+      } else if (data.workOrder && !data.woAutoStarted) {
+        showToast(`▶ Started JC ${jcName} (WO ${data.workOrder} already running)`);
+      } else {
+        showToast(`▶ Started Job Card ${jcName}`);
+      }
+
       await fetchSchedule(true);
     } catch (err) {
       setWoTimers(prev => ({ ...prev, [jcName]: previousTimer }));
@@ -1350,7 +1365,28 @@ const Scheduler = () => {
   const handleCellDrop = async (e, targetDate, targetWorkstation) => {
     e.preventDefault();
     setDragOverCell(null);
-    const ev = draggedEvent;
+    let ev = draggedEvent;
+
+    // Fallback if draggedEvent state was lost during dragover re-renders
+    if (!ev) {
+      try {
+        const raw = e.dataTransfer.getData('text/plain');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed.isBatchGroup && parsed.groupId) {
+            const groupEvs = events.filter(item => item.extendedProps?.batchGroup?.batchGroupId === parsed.groupId);
+            if (groupEvs.length > 0) {
+              ev = { isBatchGroup: true, groupId: parsed.groupId, events: groupEvs };
+            }
+          } else if (parsed.id) {
+            ev = events.find(item => item.id === parsed.id);
+          }
+        }
+      } catch (err) {
+        // ignore
+      }
+    }
+
     if (!ev) return;
 
     if (ev.isBatchGroup) {
