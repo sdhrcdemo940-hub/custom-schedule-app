@@ -1078,7 +1078,7 @@ app.post('/api/work-orders/:id/finish', async (req, res) => {
   }
 });
 
-// Cancel Work Order Timer & Status
+// Cancel Work Order in ERPNext and cancel its timer & linked Job Cards
 app.post('/api/work-orders/:id/cancel', async (req, res) => {
   const woId = req.params.id;
   try {
@@ -1089,25 +1089,103 @@ app.post('/api/work-orders/:id/cancel', async (req, res) => {
     timer.lastIntervalStart = null;
     timer.cancelledAt = new Date().toISOString();
 
+    // 1. Cancel linked Job Cards in ERPNext & timer storage
+    try {
+      const jcList = await erpnextAPI.get('/Job Card', {
+        params: {
+          fields: JSON.stringify(['name']),
+          filters: JSON.stringify([['work_order', '=', woId], ['docstatus', '!=', 2]]),
+          limit_page_length: 50
+        }
+      });
+      for (const jc of (jcList.data.data || [])) {
+        if (timers[jc.name]) {
+          timers[jc.name].status = 'cancelled';
+          timers[jc.name].lastIntervalStart = null;
+          timers[jc.name].cancelledAt = new Date().toISOString();
+        }
+        try {
+          await erpnextMethodAPI.post('/frappe.client.cancel', { doctype: 'Job Card', name: jc.name });
+          console.log(`Cancelled Job Card ${jc.name} for WO ${woId}`);
+        } catch (jcCancelErr) {
+          try {
+            await erpnextMethodAPI.post('/frappe.client.set_value', {
+              doctype: 'Job Card',
+              name: jc.name,
+              fieldname: 'status',
+              value: 'Cancelled'
+            });
+          } catch (e) {}
+        }
+      }
+    } catch (jcErr) {
+      console.warn(`Could not fetch Job Cards to cancel for WO ${woId}:`, jcErr.message);
+    }
+
     saveTimers(timers);
     console.log(`✕ Cancelled timer for Work Order ${woId}`);
 
-    // Update ERPNext WO status to Cancelled
+    // 2. Unlink from Virtual Work Order if needed to prevent LinkExistsError
     try {
-      await erpnextMethodAPI.post('/frappe.client.set_value', {
-        doctype: 'Work Order',
-        name: woId,
-        fieldname: 'status',
-        value: 'Cancelled'
+      const vwoList = await erpnextAPI.get('/Virtual Work Order', {
+        params: { fields: JSON.stringify(['name']), limit_page_length: 100 }
       });
-      console.log(`Set Work Order ${woId} status to 'Cancelled' in ERPNext`);
-    } catch (erpErr) {
-      console.warn(`Could not update ERPNext cancel status for WO ${woId}:`, parseERPNextError(erpErr));
+      for (const v of (vwoList.data.data || [])) {
+        try {
+          const fullVWO = (await erpnextAPI.get(`/Virtual Work Order/${v.name}`)).data.data;
+          let modified = false;
+          if (Array.isArray(fullVWO.sub_wos)) {
+            const subWoRow = fullVWO.sub_wos.find(s => s.sub_wo === woId);
+            if (subWoRow && subWoRow.status !== 'Cancelled') {
+              subWoRow.status = 'Cancelled';
+              modified = true;
+            }
+          }
+          if (fullVWO.master_wo === woId) {
+            fullVWO.master_wo = '';
+            modified = true;
+          }
+          if (modified) {
+            await erpnextAPI.put(`/Virtual Work Order/${v.name}`, fullVWO);
+          }
+        } catch (e) {}
+      }
+    } catch (vwoErr) {}
+
+    // 3. Attempt standard document cancellation on Work Order in ERPNext
+    let erpNextResult = 'cancelled';
+    try {
+      await erpnextMethodAPI.post('/frappe.client.cancel', {
+        doctype: 'Work Order',
+        name: woId
+      });
+      console.log(`✅ Cancelled Work Order ${woId} in ERPNext (docstatus: 2)`);
+    } catch (cancelErr) {
+      console.warn(`Standard cancel for WO ${woId} failed (${cancelErr.message}), trying stop_unstop...`);
+      // 4. Fallback: If cannot cancel (e.g. submitted stock entry exists), stop the work order in ERPNext
+      try {
+        await erpnextMethodAPI.post('/erpnext.manufacturing.doctype.work_order.work_order.stop_unstop', {
+          work_order: woId,
+          status: 'Stopped'
+        });
+        erpNextResult = 'stopped';
+        console.log(`✅ Stopped Work Order ${woId} in ERPNext`);
+      } catch (stopErr) {
+        // 5. Fallback: Force status update to Cancelled via set_value
+        await erpnextMethodAPI.post('/frappe.client.set_value', {
+          doctype: 'Work Order',
+          name: woId,
+          fieldname: 'status',
+          value: 'Cancelled'
+        });
+        erpNextResult = 'status_updated';
+        console.log(`Set Work Order ${woId} status to 'Cancelled' via set_value in ERPNext`);
+      }
     }
 
-    res.json({ success: true, timer, message: `Work Order ${woId} cancelled` });
+    res.json({ success: true, timer, erpNextResult, message: `Work Order ${woId} cancelled in ERPNext` });
   } catch (error) {
-    console.error('Error cancelling WO timer:', error.message);
+    console.error('Error cancelling WO:', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1379,18 +1457,26 @@ app.post('/api/job-cards/:id/cancel', async (req, res) => {
 
     // Update ERPNext Job Card status to 'Cancelled'
     try {
-      await erpnextMethodAPI.post('/frappe.client.set_value', {
+      await erpnextMethodAPI.post('/frappe.client.cancel', {
         doctype: 'Job Card',
-        name: jcId,
-        fieldname: 'status',
-        value: 'Cancelled'
+        name: jcId
       });
-      console.log(`Set Job Card ${jcId} status to 'Cancelled' in ERPNext`);
-    } catch (erpErr) {
-      console.warn(`Could not update ERPNext cancel status for Job Card ${jcId}:`, parseERPNextError(erpErr));
+      console.log(`✅ Cancelled Job Card ${jcId} in ERPNext (docstatus: 2)`);
+    } catch (erpCancelErr) {
+      try {
+        await erpnextMethodAPI.post('/frappe.client.set_value', {
+          doctype: 'Job Card',
+          name: jcId,
+          fieldname: 'status',
+          value: 'Cancelled'
+        });
+        console.log(`Set Job Card ${jcId} status to 'Cancelled' via set_value in ERPNext`);
+      } catch (erpErr) {
+        console.warn(`Could not update ERPNext cancel status for Job Card ${jcId}:`, parseERPNextError(erpErr));
+      }
     }
 
-    res.json({ success: true, timer, message: `Job Card ${jcId} cancelled` });
+    res.json({ success: true, timer, message: `Job Card ${jcId} cancelled in ERPNext` });
   } catch (error) {
     console.error('Error cancelling Job Card:', error.message);
     res.status(500).json({ success: false, error: error.message });

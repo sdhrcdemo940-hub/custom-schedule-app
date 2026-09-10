@@ -1,0 +1,14 @@
+{
+  "models": [
+    {
+      "title": "Qwen 2.5 (Smart Chat)",
+      "provider": "ollama",
+      "model": "qwen2.5:latest"
+    },
+    {
+      "title": "Llama 3",
+      "provider": "ollama",
+      "model": "llama3"
+    }
+  ],
+  
