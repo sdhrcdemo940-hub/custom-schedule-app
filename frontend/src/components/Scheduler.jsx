@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
-import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import './Scheduler.css';
 
@@ -31,7 +30,7 @@ const Scheduler = () => {
   });
   const [viewFilter, setViewFilter] = useState(() => {
     const saved = localStorage.getItem('scheduler_view_filter');
-    return (saved === 'jobcard' || saved === 'workorder' || saved === 'all') ? saved : 'all';
+    return (saved === 'workorder' || saved === 'batch' || saved === 'all') ? saved : 'all';
   });
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState(() => {
@@ -56,6 +55,7 @@ const Scheduler = () => {
   });
   const [draggedEvent, setDraggedEvent] = useState(null);
   const [dragOverCell, setDragOverCell] = useState(null);
+
 
   // ── Create Work Order Modal State ──
   const [createWOModal, setCreateWOModal] = useState(null); // null | { date, workstation }
@@ -812,6 +812,28 @@ const Scheduler = () => {
     return colors[status] || '#7c3aed';
   };
 
+  const resolveLiveWOStatus = (woName, fallbackStatus) => {
+    const t = woTimers[woName];
+    const ts = t?.status;
+    const fb = fallbackStatus || 'Draft';
+    const lower = fb.toLowerCase();
+    if (ts === 'completed' || lower === 'completed') return 'Completed';
+    if (ts === 'cancelled' || lower === 'cancelled') return 'Cancelled';
+    if (ts === 'running' || lower === 'in process' || lower === 'in progress' || lower === 'work in progress') return 'In Process';
+    if (ts === 'paused' || lower === 'stopped' || lower === 'on hold') return 'Stopped';
+    return fb;
+  };
+
+  const resolveLiveBatchStatus = (subWOsList, masterStatus) => {
+    const lives = (subWOsList || []).map(s => resolveLiveWOStatus(s.name, s.status));
+    if (lives.some(s => s === 'In Process')) return 'In Process';
+    if (lives.some(s => s === 'Stopped')) return 'Stopped';
+    if (lives.length > 0 && lives.every(s => s === 'Completed')) return 'Completed';
+    if (lives.length > 0 && lives.every(s => s === 'Cancelled')) return 'Cancelled';
+    if (lives.some(s => s === 'Completed') && lives.every(s => s === 'Completed' || s === 'Cancelled')) return 'Completed';
+    return resolveLiveWOStatus(null, masterStatus);
+  };
+
   // Check if a Work Order or Job Card is locked from drag & drop (already started, completed, paused, or cancelled)
   const isWODragLocked = (event) => {
     const ext = event?.extendedProps || event;
@@ -962,15 +984,116 @@ const Scheduler = () => {
   // FullCalendar Custom Event Card Renderer
   const renderEventContent = (eventInfo) => {
     const ext = eventInfo.event.extendedProps || {};
+    const isBatchGroup = ext.type === 'batchgroup';
     const isJobCard = ext.type === 'jobcard';
     const itemCode = ext.itemCode || ext.raw?.production_item || ext.docName;
     const woName = ext.workOrder || (ext.type === 'workorder' ? ext.docName : null);
-    const qty = ext.qty || ext.raw?.for_quantity || ext.raw?.qty;
+    const qty = ext.qty || ext.raw?.for_quantity || ext.raw?.qty || ext.totalQty;
     const operation = ext.operation;
     const station = ext.workstation;
     const status = ext.status;
     const jobCards = Array.isArray(ext.jobCards) ? ext.jobCards : [];
+    const batchGroup = ext.batchGroup;
 
+    // ── 1. Batch Group Event Card in Calendar View ──
+    if (isBatchGroup) {
+      const groupId = ext.batchGroupId || ext.docName;
+      const subWOs = Array.isArray(ext.subWOs) ? ext.subWOs : [];
+      const progress = ext.progress || { total: subWOs.length, completed: 0, percentage: 0 };
+      const totalQty = ext.totalQty || (ext.qtyPerBatch && ext.batchCount ? ext.qtyPerBatch * ext.batchCount : qty);
+      const batchCountLabel = ext.batchCount || subWOs.length;
+      const liveStatus = ext.liveStatus || resolveLiveBatchStatus(subWOs, status);
+
+      return (
+        <div
+          className="fc-custom-event-node fc-node-batch"
+          title={`Batch Group: ${groupId}\nItem: ${itemCode}\nBatches: ${batchCountLabel} (${ext.qtyPerBatch || '?'} kg each)\nTotal: ${totalQty} kg\nStatus: ${liveStatus}\nWorkstation: ${station || 'N/A'}\n\nClick to open in ERPNext\nDrag to reschedule entire batch`}
+        >
+          <div className="fc-batch-cal-top">
+            <span className="fc-batch-cal-id">{groupId}</span>
+            {totalQty !== undefined && totalQty !== null && totalQty !== '' && (
+              <span className="fc-batch-cal-qty">{totalQty} kg</span>
+            )}
+          </div>
+          <div className="fc-batch-cal-item">{itemCode}</div>
+          <div className="fc-batch-cal-meta">{batchCountLabel} batches · {liveStatus}{station && station !== 'Unassigned' ? ` · ${station}` : ''}</div>
+
+          {subWOs.length > 0 && (
+            <div className="fc-batch-progress-container">
+              <div className="fc-batch-progress-bar">
+                <div
+                  className="fc-batch-progress-fill"
+                  style={{ width: `${progress.percentage || 0}%` }}
+                />
+              </div>
+              <span className="fc-batch-progress-text">{progress.completed}/{subWOs.length}</span>
+            </div>
+          )}
+
+          {subWOs.length > 0 && (
+            <details className="fc-batch-cal-dropdown" onClick={(e) => e.stopPropagation()}>
+              <summary className="fc-batch-cal-summary">
+                <span>View orders</span>
+                <span className="fc-batch-cal-caret">▾</span>
+              </summary>
+              <div className="fc-batch-cal-menu">
+                {subWOs.map(sub => {
+                  const t = woTimers[sub.name];
+                  const timerStatus = t?.status || 'idle';
+                  const totalSecs = getWOTimerSeconds(sub.name);
+                  const isCompleted = (sub.status || '').toLowerCase() === 'completed' || timerStatus === 'completed';
+                  const effectiveStatus = resolveLiveWOStatus(sub.name, sub.status);
+
+                  return (
+                    <div
+                      key={sub.name}
+                      className="fc-batch-cal-sub"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openDoc('workorder', sub.name);
+                      }}
+                      title={`Open ${sub.name} in ERPNext`}
+                    >
+                      <div className="fc-batch-cal-sub-row">
+                        <span className="fc-batch-cal-sub-num">#{sub.batchNumber}</span>
+                        <span className="fc-batch-cal-sub-name">{sub.name}</span>
+                        <span
+                          className="fc-batch-cal-sub-status"
+                          style={{ color: getStatusColorWO(effectiveStatus) }}
+                        >
+                          {effectiveStatus}
+                        </span>
+                      </div>
+                      <div className="fc-sub-timer-row" onClick={(e) => e.stopPropagation()}>
+                        {isCompleted ? (
+                          <span className="fc-sub-done">Done{totalSecs > 0 ? ` ${formatTimerDuration(totalSecs)}` : ''}</span>
+                        ) : timerStatus === 'running' ? (
+                          <div className="fc-sub-timer-live">
+                            <span className="timer-digits-sm">{formatTimerDuration(totalSecs)}</span>
+                            <button className="fc-sub-btn" onClick={(e) => handlePauseTimer(sub.name, e)} title="Pause">⏸</button>
+                            <button className="fc-sub-btn finish" onClick={(e) => handleFinishTimer(sub.name, e)} title="Finish">⏹</button>
+                          </div>
+                        ) : timerStatus === 'paused' ? (
+                          <div className="fc-sub-timer-live paused">
+                            <span className="timer-digits-sm">{formatTimerDuration(totalSecs)}</span>
+                            <button className="fc-sub-btn resume" onClick={(e) => handleResumeTimer(sub.name, e)} title="Resume">▶</button>
+                            <button className="fc-sub-btn finish" onClick={(e) => handleFinishTimer(sub.name, e)} title="Finish">⏹</button>
+                          </div>
+                        ) : (
+                          <button className="fc-sub-btn start" onClick={(e) => handleStartTimer(sub.name, e)} title="Start Production">▶ Start</button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
+          )}
+        </div>
+      );
+    }
+
+    // ── 2. Standalone Work Order or Job Card ──
     return (
       <div
         className={`fc-custom-event-node ${isJobCard ? 'fc-node-jc' : 'fc-node-wo'}`}
@@ -984,7 +1107,12 @@ const Scheduler = () => {
         </div>
 
         <div className="fc-event-meta-row">
-          {woName && (
+          {batchGroup && (
+            <span className="fc-event-batch-tag" style={{ backgroundColor: getBatchGroupColor(batchGroup.batchGroupId) }}>
+              📦 {batchGroup.batchGroupId} (#{batchGroup.batchNumber})
+            </span>
+          )}
+          {woName && !batchGroup && (
             <span className="fc-event-wo-pill">WO: {woName}</span>
           )}
           {isJobCard && (
@@ -1036,6 +1164,25 @@ const Scheduler = () => {
   // FullCalendar event drop handler
   const handleFullCalendarDrop = async (info) => {
     const { event } = info;
+    const ext = event.extendedProps || {};
+
+    if (ext.type === 'batchgroup') {
+      const groupId = ext.batchGroupId || ext.docName;
+      const groupEvents = events.filter(e => e.extendedProps?.batchGroup?.batchGroupId === groupId);
+      const lockedWO = groupEvents.find(ev => isWODragLocked(ev));
+      if (lockedWO) {
+        showToast(`🔒 Batch Group "${groupId}" has locked Work Orders (${lockedWO.extendedProps?.docName}) and cannot be rescheduled.`, true);
+        info.revert();
+        return;
+      }
+      try {
+        await rescheduleBatchGroup(groupId, groupEvents, event.start, ext.workstation);
+      } catch (err) {
+        info.revert();
+      }
+      return;
+    }
+
     // Block drop for locked Work Orders
     if (isWODragLocked({ extendedProps: event.extendedProps })) {
       showToast(`🔒 WO "${event.extendedProps?.docName}" is ${event.extendedProps?.status} and cannot be rescheduled.`, true);
@@ -1168,33 +1315,250 @@ const Scheduler = () => {
     return s <= dayEnd && en >= dayStart;
   };
 
-  // Filtered events — used by the Calendar view (respects all filters including type)
+  // Returns a stable color for a given batch group ID (consistent per session)
+  function getBatchGroupColor(batchGroupId) {
+    const palette = [
+      '#6366f1', '#8b5cf6', '#ec4899', '#f59e0b',
+      '#10b981', '#3b82f6', '#ef4444', '#14b8a6',
+      '#f97316', '#a855f7', '#06b6d4', '#84cc16',
+    ];
+    if (!batchGroupId) return palette[0];
+    let hash = 0;
+    for (let i = 0; i < batchGroupId.length; i++) {
+      hash = batchGroupId.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return palette[Math.abs(hash) % palette.length];
+  }
+
+  // Filtered events — used by the Calendar view (supports Batch Groups, Work Orders, Job Cards)
   const filteredEvents = useMemo(() => {
-    return events.filter(e => {
-      // Type filter (calendar view only)
-      if (viewFilter !== 'all' && e.extendedProps?.type !== viewFilter) {
-        return false;
+    // 1. Build Batch Group consolidated events
+    const batchGroupEvents = [];
+    const processedBatchIds = new Set();
+
+    // Loop through batchGroups from backend
+    (batchGroups || []).forEach(bg => {
+      if (!bg.id || processedBatchIds.has(bg.id)) return;
+      processedBatchIds.add(bg.id);
+
+      const groupEvs = events.filter(e => e.extendedProps?.batchGroup?.batchGroupId === bg.id);
+      const masterEv = groupEvs.find(e => e.extendedProps?.batchGroup?.role === 'master');
+      const subEvs = groupEvs.filter(e => e.extendedProps?.batchGroup?.role === 'sub');
+
+      const itemCode = bg.productionItem || groupEvs[0]?.extendedProps?.itemCode || 'Product';
+      const batchCount = bg.batchCount || groupEvs[0]?.extendedProps?.batchGroup?.batchCount || subEvs.length || 1;
+      const qtyPerBatch = bg.qtyPerBatch || groupEvs[0]?.extendedProps?.batchGroup?.qtyPerBatch || groupEvs[0]?.extendedProps?.qty || 0;
+      const totalQty = bg.totalQty || (qtyPerBatch * batchCount);
+      const masterStatus = bg.masterStatus || masterEv?.extendedProps?.status || 'Draft';
+      const workstation = bg.workstation || groupEvs[0]?.extendedProps?.workstation || 'Unassigned';
+
+      // Find start & end dates
+      const starts = groupEvs.map(e => e.start instanceof Date ? e.start : new Date(e.start)).filter(d => !isNaN(d.getTime()));
+      const ends = groupEvs.map(e => e.end ? (e.end instanceof Date ? e.end : new Date(e.end)) : (e.start instanceof Date ? e.start : new Date(e.start))).filter(d => !isNaN(d.getTime()));
+
+      let start = starts.length > 0 ? new Date(Math.min(...starts)) : parseDateTime(bg.plannedDate);
+      let end = ends.length > 0 ? new Date(Math.max(...ends)) : (start ? new Date(start.getTime() + 9 * 3600 * 1000) : null);
+
+      if (!start) start = new Date();
+      if (!end) end = new Date(start.getTime() + 9 * 3600 * 1000);
+
+      const subWOsList = bg.subWOs && bg.subWOs.length > 0
+        ? bg.subWOs
+        : subEvs.map(e => ({
+          name: e.extendedProps?.docName,
+          batchNumber: e.extendedProps?.batchGroup?.batchNumber,
+          status: e.extendedProps?.status || 'Draft'
+        }));
+
+      const completedCount = subWOsList.filter(s => {
+        const t = woTimers[s.name];
+        return (s.status || '').toLowerCase() === 'completed' || t?.status === 'completed';
+      }).length;
+      const inProcessCount = subWOsList.filter(s => {
+        const t = woTimers[s.name];
+        return (s.status || '').toLowerCase() === 'in process' || t?.status === 'running';
+      }).length;
+      const pct = subWOsList.length > 0 ? Math.round((completedCount / subWOsList.length) * 100) : 0;
+      const liveStatus = resolveLiveBatchStatus(subWOsList, masterStatus);
+      const statusColor = getStatusColorWO(liveStatus);
+
+      batchGroupEvents.push({
+        id: `batch-${bg.id}`,
+        title: `[${bg.id}] ${itemCode}${totalQty ? ` (${totalQty} kg)` : ''} · ${batchCount} Batches`,
+        start: start,
+        end: end,
+        allDay: false,
+        backgroundColor: statusColor,
+        borderColor: '#334155',
+        textColor: '#ffffff',
+        classNames: ['fc-event-batch'],
+        extendedProps: {
+          type: 'batchgroup',
+          batchGroupId: bg.id,
+          docName: bg.id,
+          itemCode: itemCode,
+          totalQty: totalQty,
+          batchCount: batchCount,
+          qtyPerBatch: qtyPerBatch,
+          workstation: workstation,
+          status: liveStatus,
+          liveStatus,
+          subWOs: subWOsList,
+          progress: {
+            total: subWOsList.length,
+            completed: completedCount,
+            inProcess: inProcessCount,
+            percentage: pct
+          },
+          timeRange: formatTimeRange(start, end),
+          rawGroup: bg,
+          events: groupEvs
+        }
+      });
+    });
+
+    // Also check for any events with batchGroup that weren't in batchGroups array
+    events.forEach(e => {
+      const gid = e.extendedProps?.batchGroup?.batchGroupId;
+      if (gid && !processedBatchIds.has(gid)) {
+        processedBatchIds.add(gid);
+        const groupEvs = events.filter(item => item.extendedProps?.batchGroup?.batchGroupId === gid);
+        const first = groupEvs[0];
+        const itemCode = first.extendedProps?.itemCode || 'Product';
+        const batchCount = first.extendedProps?.batchGroup?.batchCount || groupEvs.length;
+        const qtyPerBatch = first.extendedProps?.batchGroup?.qtyPerBatch || first.extendedProps?.qty || 0;
+        const totalQty = first.extendedProps?.batchGroup?.totalQty || (qtyPerBatch * batchCount);
+        const workstation = first.extendedProps?.workstation || 'Unassigned';
+
+        const starts = groupEvs.map(ev => ev.start instanceof Date ? ev.start : new Date(ev.start)).filter(d => !isNaN(d.getTime()));
+        const ends = groupEvs.map(ev => ev.end ? (ev.end instanceof Date ? ev.end : new Date(ev.end)) : (ev.start instanceof Date ? ev.start : new Date(ev.start))).filter(d => !isNaN(d.getTime()));
+
+        const start = starts.length > 0 ? new Date(Math.min(...starts)) : new Date();
+        const end = ends.length > 0 ? new Date(Math.max(...ends)) : new Date(start.getTime() + 9 * 3600 * 1000);
+
+        const subWOsList = groupEvs.map(ev => ({
+          name: ev.extendedProps?.docName,
+          batchNumber: ev.extendedProps?.batchGroup?.batchNumber,
+          status: ev.extendedProps?.status || 'Draft'
+        }));
+
+        const completedCount = subWOsList.filter(s => {
+          const t = woTimers[s.name];
+          return (s.status || '').toLowerCase() === 'completed' || t?.status === 'completed';
+        }).length;
+        const inProcessCount = subWOsList.filter(s => {
+          const t = woTimers[s.name];
+          return (s.status || '').toLowerCase() === 'in process' || t?.status === 'running';
+        }).length;
+        const pct = subWOsList.length > 0 ? Math.round((completedCount / subWOsList.length) * 100) : 0;
+
+        const fallbackStatus = first.extendedProps?.status || 'Draft';
+        const liveStatus = resolveLiveBatchStatus(subWOsList, fallbackStatus);
+        const statusColor = getStatusColorWO(liveStatus);
+
+        batchGroupEvents.push({
+          id: `batch-${gid}`,
+          title: `[${gid}] ${itemCode}${totalQty ? ` (${totalQty} kg)` : ''} · ${batchCount} Batches`,
+          start: start,
+          end: end,
+          allDay: false,
+          backgroundColor: statusColor,
+          borderColor: '#334155',
+          textColor: '#ffffff',
+          classNames: ['fc-event-batch'],
+          extendedProps: {
+            type: 'batchgroup',
+            batchGroupId: gid,
+            docName: gid,
+            itemCode: itemCode,
+            totalQty: totalQty,
+            batchCount: batchCount,
+            qtyPerBatch: qtyPerBatch,
+            workstation: workstation,
+            status: liveStatus,
+            liveStatus,
+            subWOs: subWOsList,
+            progress: {
+              total: subWOsList.length,
+              completed: completedCount,
+              inProcess: inProcessCount,
+              percentage: pct
+            },
+            timeRange: formatTimeRange(start, end),
+            events: groupEvs
+          }
+        });
       }
+    });
+
+    // 2. Standalone events (non-batch Work Orders and orphaned Job Cards)
+    const standaloneEvents = events
+      .filter(e => !e.extendedProps?.batchGroup?.batchGroupId)
+      .map(e => {
+        if (e.extendedProps?.type !== 'workorder') return e;
+        const liveStatus = resolveLiveWOStatus(e.extendedProps.docName, e.extendedProps.status);
+        return {
+          ...e,
+          backgroundColor: getStatusColorWO(liveStatus),
+          textColor: '#ffffff',
+          extendedProps: { ...e.extendedProps, liveStatus }
+        };
+      });
+
+    // Combine according to viewFilter. Linked Job Cards stay nested inside WO cards.
+    const standaloneWOs = standaloneEvents.filter(e => e.extendedProps?.type === 'workorder');
+    let allCalendarEvents = [];
+    if (viewFilter === 'batch') {
+      allCalendarEvents = [...batchGroupEvents];
+    } else if (viewFilter === 'workorder') {
+      allCalendarEvents = [...standaloneWOs];
+    } else {
+      allCalendarEvents = [...batchGroupEvents, ...standaloneEvents];
+    }
+
+    // Apply Status Filter & Search Query
+    return allCalendarEvents.filter(e => {
+      const ext = e.extendedProps || {};
+      const isBatch = ext.type === 'batchgroup';
+
       // Status filter
-      if (statusFilter !== 'all' && (e.extendedProps?.status || '').toLowerCase() !== statusFilter.toLowerCase()) {
-        return false;
+      if (statusFilter !== 'all') {
+        const targetStatus = statusFilter.toLowerCase();
+        if (isBatch) {
+          const p = ext.progress || {};
+          if (targetStatus === 'completed') {
+            if (p.percentage < 100 && (ext.status || '').toLowerCase() !== 'completed') return false;
+          } else if (targetStatus === 'in progress') {
+            if (p.inProcess === 0 && p.percentage === 0 && (ext.status || '').toLowerCase() !== 'in process') return false;
+          } else if (targetStatus === 'not started') {
+            if (p.completed > 0 || p.inProcess > 0) return false;
+          }
+        } else {
+          if ((ext.liveStatus || ext.status || '').toLowerCase() !== targetStatus) {
+            return false;
+          }
+        }
       }
+
       // Search query
       if (searchQuery.trim()) {
         const query = searchQuery.toLowerCase();
         const title = (e.title || '').toLowerCase();
-        const item = (e.extendedProps?.itemCode || '').toLowerCase();
-        const wo = (e.extendedProps?.workOrder || '').toLowerCase();
-        const doc = (e.extendedProps?.docName || '').toLowerCase();
-        const op = (e.extendedProps?.operation || '').toLowerCase();
-        const ws = (e.extendedProps?.workstation || '').toLowerCase();
-        if (!title.includes(query) && !item.includes(query) && !wo.includes(query) && !doc.includes(query) && !op.includes(query) && !ws.includes(query)) {
+        const item = (ext.itemCode || '').toLowerCase();
+        const wo = (ext.workOrder || '').toLowerCase();
+        const doc = (ext.docName || ext.batchGroupId || '').toLowerCase();
+        const op = (ext.operation || '').toLowerCase();
+        const ws = (ext.workstation || '').toLowerCase();
+        const subNames = isBatch && Array.isArray(ext.subWOs) ? ext.subWOs.map(s => (s.name || '').toLowerCase()).join(' ') : '';
+
+        if (!title.includes(query) && !item.includes(query) && !wo.includes(query) && !doc.includes(query) && !op.includes(query) && !ws.includes(query) && !subNames.includes(query)) {
           return false;
         }
       }
+
       return true;
     });
-  }, [events, viewFilter, statusFilter, searchQuery]);
+  }, [events, batchGroups, viewFilter, statusFilter, searchQuery, woTimers]);
 
   // Matrix events — shows both Job Cards and Work Orders
   const matrixEvents = useMemo(() => {
@@ -1440,6 +1804,7 @@ const Scheduler = () => {
     if (type === 'jobcard') docType = 'job-card';
     else if (type === 'workorder') docType = 'work-order';
     else if (type === 'workstation') docType = 'workstation';
+    else if (type === 'batchgroup' || type === 'virtual-work-order') docType = 'virtual-work-order';
     else docType = type;
     //window.open(`http://localhost:8080/app/${docType}/${encodeURIComponent(docName)}`, '_blank');
     window.open(`${process.env.REACT_APP_ERPNEXT_URL}/app/${docType}/${encodeURIComponent(docName)}`, '_blank');
@@ -1461,18 +1826,6 @@ const Scheduler = () => {
     }
   };
 
-  // Batch group color generator (consistent color per group ID)
-  const getBatchGroupColor = (groupId) => {
-    const colors = [
-      '#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6',
-      '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#06b6d4'
-    ];
-    let hash = 0;
-    for (let i = 0; i < groupId.length; i++) {
-      hash = groupId.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    return colors[Math.abs(hash) % colors.length];
-  };
 
   const monthTitle = activeDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toUpperCase();
 
@@ -1599,8 +1952,8 @@ const Scheduler = () => {
               onChange={(e) => setViewFilter(e.target.value)}
             >
               <option value="all">All Documents</option>
-              <option value="jobcard">Job Cards Only</option>
-              <option value="workorder">Work Orders Only</option>
+              <option value="batch">Batch Groups</option>
+              <option value="workorder">Work Orders</option>
             </select>
           )}
 
@@ -1887,25 +2240,25 @@ const Scheduler = () => {
                                         const totalQtyVal = stateGroup?.totalQty || (qtyPerBatchVal * batchCountVal);
                                         const masterWOName = stateGroup?.masterWO || masterEv?.extendedProps?.docName || (eventsInGroup[0]?.extendedProps?.batchGroup?.masterWO);
                                         const masterStatus = stateGroup?.masterStatus || masterEv?.extendedProps?.status || 'Draft';
-
                                         const groupColor = getBatchGroupColor(groupId);
 
                                         // Compute progress
                                         const subWOsList = stateGroup?.subWOs && stateGroup.subWOs.length > 0
                                           ? stateGroup.subWOs
                                           : subEvs.map(e => ({
-                                              name: e.extendedProps?.docName,
-                                              batchNumber: e.extendedProps?.batchGroup?.batchNumber,
-                                              status: e.extendedProps?.status || 'Draft'
-                                            }));
+                                            name: e.extendedProps?.docName,
+                                            batchNumber: e.extendedProps?.batchGroup?.batchNumber,
+                                            status: e.extendedProps?.status || 'Draft'
+                                          }));
 
                                         const completedCount = subWOsList.filter(s => {
                                           const t = woTimers[s.name];
                                           return (s.status || '').toLowerCase() === 'completed' || t?.status === 'completed';
                                         }).length;
                                         const pct = subWOsList.length > 0 ? Math.round((completedCount / subWOsList.length) * 100) : 0;
+                                        const liveStatus = resolveLiveBatchStatus(subWOsList, masterStatus);
 
-                                        const isGroupLocked = ['in process', 'completed'].includes((masterStatus || '').toLowerCase()) ||
+                                        const isGroupLocked = ['in process', 'completed', 'stopped'].includes((liveStatus || '').toLowerCase()) ||
                                           subWOsList.some(s => ['in process', 'completed'].includes((s.status || '').toLowerCase()));
 
                                         const targetEditEv = masterEv || eventsInGroup[0];
@@ -1918,7 +2271,7 @@ const Scheduler = () => {
                                             onDragEnd={handleDragEnd}
                                             className={`matrix-batch-card ${isGroupLocked ? 'card-locked' : ''}`}
                                             style={{ borderLeftColor: groupColor, cursor: isGroupLocked ? 'default' : 'grab' }}
-                                            title={`📦 Batch Group: ${groupId}\nItem: ${itemCode}\nBatches: ${batchCountVal} (${qtyPerBatchVal} kg each)\nTotal: ${totalQtyVal} kg\nStatus: ${masterStatus}\n\n👉 Click time to edit schedule\n👉 Click ▾ to view sub-orders\n👉 Drag & drop to reschedule entire group`}
+                                            title={`Batch Group: ${groupId}\nItem: ${itemCode}\nBatches: ${batchCountVal} (${qtyPerBatchVal} kg each)\nTotal: ${totalQtyVal} kg\nStatus: ${liveStatus}\n\nClick time to edit schedule\nClick ▾ to view sub-orders\nDrag & drop to reschedule entire group`}
                                           >
                                             <div className="matrix-batch-header">
                                               <div className="matrix-batch-top">
@@ -2362,12 +2715,12 @@ const Scheduler = () => {
           <div className="fullcalendar-wrapper">
             <FullCalendar
               ref={calendarRef}
-              plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+              plugins={[dayGridPlugin, interactionPlugin]}
               initialView="dayGridMonth"
               headerToolbar={{
                 left: 'prev,next today',
                 center: 'title',
-                right: 'dayGridMonth,timeGridWeek,timeGridDay'
+                right: ''
               }}
               events={filteredEvents}
               editable={true}
@@ -2375,18 +2728,25 @@ const Scheduler = () => {
               eventDrop={handleFullCalendarDrop}
               eventResize={handleFullCalendarDrop}
               eventAllow={(dropInfo, draggedEvent) => {
+                const ext = draggedEvent.extendedProps || {};
+                if (ext.type === 'batchgroup') {
+                  const groupId = ext.batchGroupId || ext.docName;
+                  const groupEvents = events.filter(e => e.extendedProps?.batchGroup?.batchGroupId === groupId);
+                  const lockedWO = groupEvents.find(ev => isWODragLocked(ev));
+                  return !lockedWO;
+                }
                 // Prevent dragging locked Work Orders in calendar view
                 return !isWODragLocked({ extendedProps: draggedEvent.extendedProps });
               }}
               eventDisplay="block"
               height="auto"
-              dateClick={(info) => {
-                const calendarApi = calendarRef.current.getApi();
-                calendarApi.changeView('timeGridDay', info.date);
-              }}
               eventClick={(info) => {
-                const ext = info.event.extendedProps;
-                openDoc(ext.type, ext.docName);
+                const ext = info.event.extendedProps || {};
+                if (ext.type === 'batchgroup') {
+                  openDoc('virtual-work-order', ext.batchGroupId || ext.docName);
+                } else {
+                  openDoc(ext.type, ext.docName);
+                }
               }}
             />
           </div>
@@ -2509,7 +2869,7 @@ const Scheduler = () => {
                         required={batchMode}
                       />
                       <small style={{ color: '#64748b', fontSize: '11px', display: 'block', marginTop: '4px' }}>
-                        Will create 1 Master WO + {batchCount} Sub-Work-Orders ({woForm.qty || 0} units per batch, total { (Number(woForm.qty) || 0) * batchCount } units) on {woForm.planned_start_date}.
+                        Will create 1 Master WO + {batchCount} Sub-Work-Orders ({woForm.qty || 0} units per batch, total {(Number(woForm.qty) || 0) * batchCount} units) on {woForm.planned_start_date}.
                       </small>
                     </div>
                   </div>
@@ -2642,7 +3002,10 @@ const Scheduler = () => {
                           <strong>{group.productionItem}</strong> · {group.batchCount} batches ({group.qtyPerBatch} kg/batch = total {group.totalQty} kg)
                         </div>
                         <div className="batch-group-master">
-                          Master WO: <span className="clickable-link" onClick={(e) => { e.stopPropagation(); openDoc('workorder', group.masterWO); }}>{group.masterWO}</span> ({group.masterStatus || 'Draft'})
+                          {group.masterWO
+                            ? <>Master WO: <span className="clickable-link" onClick={(e) => { e.stopPropagation(); openDoc('workorder', group.masterWO); }}>{group.masterWO}</span> ({resolveLiveBatchStatus(group.subWOs || [], group.masterStatus)})</>
+                            : <>Status: {resolveLiveBatchStatus(group.subWOs || [], group.masterStatus)}</>
+                          }
                         </div>
 
                         {/* Progress Bar */}

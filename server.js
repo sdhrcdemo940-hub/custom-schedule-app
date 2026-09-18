@@ -1788,6 +1788,14 @@ app.get('/api/batch-work-orders', async (req, res) => {
           ? Math.round((completedCount / group.subWOs.length) * 100)
           : 0
       };
+
+      if (group.subWOs && group.subWOs.length > 0 && completedCount === group.subWOs.length) {
+        group.masterStatus = 'Completed';
+      } else if (inProcessCount > 0) {
+        group.masterStatus = 'In Process';
+      } else if (group.masterStatus === 'Virtual Holder') {
+        group.masterStatus = 'Draft';
+      }
     }
 
     res.json({ success: true, groups: groupList });
@@ -2152,10 +2160,17 @@ app.get('/api/schedule', async (req, res) => {
 
           const completedCount = subWOsEnriched.filter(s => (s.status || '').toLowerCase() === 'completed').length;
           const inProcessCount = subWOsEnriched.filter(s => (s.status || '').toLowerCase() === 'in process').length;
+          const stoppedCount = subWOsEnriched.filter(s => ['stopped', 'on hold'].includes((s.status || '').toLowerCase())).length;
+          let liveMasterStatus = 'Draft';
+          if (subWOsEnriched.length > 0 && completedCount === subWOsEnriched.length) liveMasterStatus = 'Completed';
+          else if (inProcessCount > 0) liveMasterStatus = 'In Process';
+          else if (stoppedCount > 0) liveMasterStatus = 'Stopped';
+          else if (group.master_wo && liveWoMap[group.master_wo]?.status) liveMasterStatus = liveWoMap[group.master_wo].status;
 
           batchGroupsList.push({
             id: group.name,
             masterWO: group.master_wo,
+            masterStatus: liveMasterStatus,
             isVirtualMaster: group.is_virtual_master === 1,
             productionItem: group.production_item,
             bomNo: group.bom_no,
