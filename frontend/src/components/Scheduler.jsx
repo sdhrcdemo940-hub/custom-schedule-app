@@ -76,6 +76,7 @@ const Scheduler = () => {
   // ── Batch Mode State ──
   const [batchMode, setBatchMode] = useState(false);
   const [batchCount, setBatchCount] = useState(2);
+  const [batchCountInput, setBatchCountInput] = useState('2'); // local string while typing
 
   // ── Batch Group Tracking State ──
   const [batchGroups, setBatchGroups] = useState([]);
@@ -2859,15 +2860,63 @@ const Scheduler = () => {
                   <div className="wo-batch-options" style={{ marginTop: '10px', padding: '12px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
                     <div className="wo-form-group" style={{ marginBottom: 0 }}>
                       <label className="wo-form-label">Number of Batches (Sub-Work-Orders) <span className="req">*</span></label>
-                      <input
-                        className="wo-form-input"
-                        type="number"
-                        min="2"
-                        max="50"
-                        value={batchCount}
-                        onChange={e => setBatchCount(parseInt(e.target.value, 10) || 2)}
-                        required={batchMode}
-                      />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0' }}>
+                        <button
+                          type="button"
+                          onClick={() => { const next = Math.max(2, batchCount - 1); setBatchCount(next); setBatchCountInput(String(next)); }}
+                          disabled={batchCount <= 2}
+                          style={{
+                            width: '36px', height: '38px', border: '1px solid #cbd5e1',
+                            borderRight: 'none', borderRadius: '6px 0 0 6px',
+                            background: batchCount <= 2 ? '#f1f5f9' : '#fff',
+                            color: batchCount <= 2 ? '#94a3b8' : '#1e293b',
+                            fontSize: '18px', fontWeight: '600', cursor: batchCount <= 2 ? 'not-allowed' : 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            transition: 'background 0.15s'
+                          }}
+                          title="Decrease batch count"
+                        >−</button>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={batchCountInput}
+                          onChange={e => {
+                            const raw = e.target.value.replace(/[^0-9]/g, '');
+                            setBatchCountInput(raw);
+                            const num = parseInt(raw, 10);
+                            if (!isNaN(num) && num >= 2 && num <= 50) setBatchCount(num);
+                          }}
+                          onBlur={() => {
+                            const num = parseInt(batchCountInput, 10);
+                            const clamped = isNaN(num) ? 2 : Math.min(50, Math.max(2, num));
+                            setBatchCount(clamped);
+                            setBatchCountInput(String(clamped));
+                          }}
+                          onFocus={e => e.target.select()}
+                          style={{
+                            width: '64px', height: '38px', border: '1px solid #cbd5e1',
+                            textAlign: 'center', fontSize: '16px', fontWeight: '600',
+                            color: '#1e293b', background: '#fff', outline: 'none',
+                            borderLeft: 'none', borderRight: 'none',
+                            fontFamily: 'inherit'
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => { const next = Math.min(50, batchCount + 1); setBatchCount(next); setBatchCountInput(String(next)); }}
+                          disabled={batchCount >= 50}
+                          style={{
+                            width: '36px', height: '38px', border: '1px solid #cbd5e1',
+                            borderLeft: 'none', borderRadius: '0 6px 6px 0',
+                            background: batchCount >= 50 ? '#f1f5f9' : '#fff',
+                            color: batchCount >= 50 ? '#94a3b8' : '#1e293b',
+                            fontSize: '18px', fontWeight: '600', cursor: batchCount >= 50 ? 'not-allowed' : 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            transition: 'background 0.15s'
+                          }}
+                          title="Increase batch count"
+                        >+</button>
+                      </div>
                       <small style={{ color: '#64748b', fontSize: '11px', display: 'block', marginTop: '4px' }}>
                         Will create 1 Master WO + {batchCount} Sub-Work-Orders ({woForm.qty || 0} units per batch, total {(Number(woForm.qty) || 0) * batchCount} units) on {woForm.planned_start_date}.
                       </small>
