@@ -1,40 +1,57 @@
+/* ─── Global App Layout & Top Chrome ─── */
+:root {
+  /* Dark chrome (soft slate, never pure black) */
+  --chrome-1: #1e293b;   /* top app bar */
+  --chrome-2: #334155;   /* date header row */
+  --chrome-border: #475569;
+  --chrome-text: #f1f5f9;
+  --chrome-text-muted: #94a3b8;
+
+  /* Light workspace */
+  --bg: #f4f6f9;          /* page / grid background */
+  --surface: #ffffff;     /* cards, toolbar, workstation column */
+  --surface-muted: #eef1f5; /* weekends, hover rows */
+  --border: #e2e6ec;
+  --text: #1f2937;
+  --text-muted: #64748b;
+  --accent: #2563eb;
+}
+
 .App {
   width: 100%;
   min-height: 100vh;
-<<<<<<< Updated upstream
-  background-color: #f5f7fa;
-=======
-  background-color: var(--pg-bg, #f7f8fa);
+  background-color: var(--bg, #f4f6f9);
   display: flex;
   flex-direction: column;
 }
 
-/* ─── Global App Navigation Bar ─── */
-/* Quiet underline tabs on a light surface bar */
+/* ─── Global App Navigation Bar (Dark Chrome Frame) ─── */
 .app-nav-bar {
   display: flex;
-  gap: 0;
-  background: var(--pg-surface, #ffffff);
-  border-bottom: 1px solid var(--pg-border, #e5e7eb);
+  align-items: center;
+  gap: 4px;
+  background: var(--chrome-1, #1e293b);
+  border-bottom: 1px solid var(--chrome-border, #475569);
   padding: 0 20px;
+  height: 48px;
   flex-shrink: 0;
 }
 
 .app-nav-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 14px;
+  padding: 0 14px;
+  height: 100%;
   border: none;
   background: transparent;
-  color: var(--pg-text-muted, #6b7280);
+  color: var(--chrome-text-muted, #94a3b8);
   font-size: 13px;
   font-weight: 500;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   cursor: pointer;
   border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  transition: color 140ms ease, border-color 140ms ease;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
   white-space: nowrap;
 }
 
@@ -44,31 +61,12 @@
 }
 
 .app-nav-btn:hover {
-  color: var(--pg-text, #111827);
+  color: var(--chrome-text, #f1f5f9);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .app-nav-btn.active {
-  color: var(--pg-accent, #2563eb);
-  border-bottom-color: var(--pg-accent, #2563eb);
+  color: var(--chrome-text, #f1f5f9);
+  border-bottom-color: var(--accent, #2563eb);
   font-weight: 600;
-}
-
-/* ─── Dark Mode Overrides (Explicit [data-theme="dark"] only) ─── */
-[data-theme="dark"] .app-nav-bar {
-  background: var(--pg-surface, #1f2937);
-  border-bottom-color: var(--pg-border, #374151);
-}
-
-[data-theme="dark"] .app-nav-btn {
-  color: var(--pg-text-muted, #9ca3af);
-}
-
-[data-theme="dark"] .app-nav-btn:hover {
-  color: var(--pg-text, #f9fafb);
-}
-
-[data-theme="dark"] .app-nav-btn.active {
-  color: var(--pg-accent, #60a5fa);
-  border-bottom-color: var(--pg-accent, #60a5fa);
->>>>>>> Stashed changes
 }
