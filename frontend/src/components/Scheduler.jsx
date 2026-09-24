@@ -334,7 +334,7 @@ const Scheduler = () => {
   const fetchSchedule = async (isBackground = false) => {
     if (!isBackground) setLoading(true);
     try {
-      const response = await fetch(`${API_URL}/schedule`);
+      const response = await fetch(`${API_URL}/schedule?_t=${Date.now()}`, { cache: 'no-store' });
       if (!response.ok) throw new Error(`Failed to fetch schedule (${response.statusText})`);
 
       const data = await response.json();
@@ -972,6 +972,9 @@ const Scheduler = () => {
         const hasParentWO = resData.data?.parentWorkOrder;
         showToast(`✓ Product '${itemCode}' [JC: ${docName}]${hasParentWO ? ` & parent WO: ${hasParentWO.name}` : ''} rescheduled to ${newDateStr}`);
       }
+
+      // Refresh in background so the scheduler shows the exact saved dates/times from ERPNext
+      fetchSchedule(true);
     } catch (err) {
       console.error('Reschedule error:', err);
       // Revert card position back to original location on failure
@@ -3101,7 +3104,7 @@ const Scheduler = () => {
           <div className="wo-modal wo-edit-time-modal">
             <div className="wo-modal-header">
               <div>
-                <h3 className="wo-modal-title">🕒 Edit Schedule & Time</h3>
+                <h3 className="wo-modal-title"> Edit Schedule & Time</h3>
                 <div className="wo-modal-subtitle">
                   {editTimeModal.docType === 'workorder' ? 'Work Order' : 'Job Card'}: <strong>{editTimeModal.docName}</strong> ({editTimeModal.itemCode})
                 </div>
