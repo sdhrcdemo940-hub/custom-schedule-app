@@ -1,5 +1,74 @@
 .App {
   width: 100%;
   min-height: 100vh;
+<<<<<<< Updated upstream
   background-color: #f5f7fa;
+=======
+  background-color: var(--pg-bg, #f7f8fa);
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── Global App Navigation Bar ─── */
+/* Quiet underline tabs on a light surface bar */
+.app-nav-bar {
+  display: flex;
+  gap: 0;
+  background: var(--pg-surface, #ffffff);
+  border-bottom: 1px solid var(--pg-border, #e5e7eb);
+  padding: 0 20px;
+  flex-shrink: 0;
+}
+
+.app-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  color: var(--pg-text-muted, #6b7280);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 140ms ease, border-color 140ms ease;
+  white-space: nowrap;
+}
+
+.app-nav-icon {
+  stroke: currentColor;
+  flex-shrink: 0;
+}
+
+.app-nav-btn:hover {
+  color: var(--pg-text, #111827);
+}
+
+.app-nav-btn.active {
+  color: var(--pg-accent, #2563eb);
+  border-bottom-color: var(--pg-accent, #2563eb);
+  font-weight: 600;
+}
+
+/* ─── Dark Mode Overrides (Explicit [data-theme="dark"] only) ─── */
+[data-theme="dark"] .app-nav-bar {
+  background: var(--pg-surface, #1f2937);
+  border-bottom-color: var(--pg-border, #374151);
+}
+
+[data-theme="dark"] .app-nav-btn {
+  color: var(--pg-text-muted, #9ca3af);
+}
+
+[data-theme="dark"] .app-nav-btn:hover {
+  color: var(--pg-text, #f9fafb);
+}
+
+[data-theme="dark"] .app-nav-btn.active {
+  color: var(--pg-accent, #60a5fa);
+  border-bottom-color: var(--pg-accent, #60a5fa);
+>>>>>>> Stashed changes
 }

@@ -622,8 +622,15 @@ const Scheduler = () => {
         <div className="header-left">
           <div className="logo-badge">PROD</div>
           <div>
+<<<<<<< Updated upstream
             <h1 className="header-title">MONTHLY PRODUCTION SCHEDULE</h1>
             <div className="header-subtitle">ERPNext v16 Interactive Work Order & Job Card Scheduler</div>
+=======
+            <div className="header-title-wrapper">
+              <h1 className="header-title">Monthly Production Schedule</h1>
+            </div>
+            <div className="header-subtitle">ERPNext v16 Interactive Work Order & Job Card Dispatch Board</div>
+>>>>>>> Stashed changes
           </div>
         </div>
 
@@ -979,7 +986,7 @@ const Scheduler = () => {
         </div>
 
         <div className="footer-right">
-          💡 <strong>Tip:</strong> Drag and drop any card to reschedule production dates. Job Cards strictly maintain their fixed machine/workstation assignments.
+          Drag a card to reschedule. Job Cards keep their assigned workstation.
         </div>
       </footer>
     </div>
