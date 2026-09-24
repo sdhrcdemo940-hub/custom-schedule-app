@@ -14,6 +14,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Anti-caching middleware for API endpoints
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+  next();
+});
+
 // Configuration
 const ERPNEXT_URL = process.env.ERPNEXT_URL;
 //const ERPNEXT_URL = process.env.ERPNEXT_URL || 'http://localhost:8080';
@@ -2025,6 +2034,42 @@ app.put('/api/schedule/sync-reschedule', async (req, res) => {
         success: true,
         message: `Job Card ${docName} updated${result.parentWorkOrder ? ` & synced with Work Order ${result.parentWorkOrder.name}` : ''}`,
         data: result
+      });
+    } else if (type === 'batchgroup' || type === 'virtual-work-order') {
+      const groupId = docName;
+      let group;
+      try {
+        const vwoResp = await erpnextAPI.get(`/Virtual Work Order/${groupId}`);
+        group = vwoResp.data.data;
+      } catch (e) {
+        return res.status(404).json({ success: false, error: `Batch group ${groupId} not found in ERPNext` });
+      }
+
+      const startDateStr = start.includes(' ') ? start : `${start} 08:00:00`;
+      const endDateStr = (end || start).includes(' ') ? (end || start) : `${end || start} 17:00:00`;
+
+      const updatePayload = {
+        planned_date: start.split(' ')[0]
+      };
+      if (workstation && workstation !== 'Unassigned') {
+        updatePayload.workstation = workstation;
+      }
+      await erpnextAPI.put(`/Virtual Work Order/${groupId}`, updatePayload);
+
+      const updatedWOs = [];
+      for (const sub of group.sub_wos || []) {
+        try {
+          await syncRescheduleWorkOrder(sub.sub_wo, startDateStr, endDateStr, workstation);
+          updatedWOs.push(sub.sub_wo);
+        } catch (err) {
+          console.warn(`Could not reschedule sub WO ${sub.sub_wo} in batch group ${groupId}:`, err.message);
+        }
+      }
+
+      return res.json({
+        success: true,
+        message: `Batch Group ${groupId} (${updatedWOs.length} Work Orders) rescheduled`,
+        data: { batchGroupId: groupId, updatedWOs }
       });
     } else {
       return res.status(400).json({ success: false, error: `Unsupported doc type: ${type}` });

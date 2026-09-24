@@ -310,8 +310,21 @@ const Scheduler = () => {
   const parseDateTime = (value) => {
     if (!value) return null;
     if (value instanceof Date) return value;
-    const normalized = String(value).replace(' ', 'T');
-    const d = new Date(normalized);
+    const str = String(value).trim();
+    if (!str) return null;
+
+    const match = str.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+    if (match) {
+      const year = parseInt(match[1], 10);
+      const month = parseInt(match[2], 10) - 1;
+      const day = parseInt(match[3], 10);
+      const hours = match[4] ? parseInt(match[4], 10) : 8;
+      const minutes = match[5] ? parseInt(match[5], 10) : 0;
+      const seconds = match[6] ? parseInt(match[6], 10) : 0;
+      return new Date(year, month, day, hours, minutes, seconds);
+    }
+
+    const d = new Date(str);
     return isNaN(d.getTime()) ? null : d;
   };
 
@@ -932,6 +945,11 @@ const Scheduler = () => {
     const workOrder = eventObj.extendedProps?.workOrder;
     if (!type || !docName) throw new Error('Invalid event data');
 
+    if (type === 'batchgroup' || type === 'virtual-work-order') {
+      const groupEvents = events.filter(e => e.extendedProps?.batchGroup?.batchGroupId === docName);
+      return await rescheduleBatchGroup(docName, groupEvents, newStart, newEnd, newWorkstation);
+    }
+
     // Store previous events state for rollback if backend request fails
     const previousEvents = events;
 
@@ -1180,7 +1198,7 @@ const Scheduler = () => {
         return;
       }
       try {
-        await rescheduleBatchGroup(groupId, groupEvents, event.start, ext.workstation);
+        await rescheduleBatchGroup(groupId, groupEvents, event.start, event.end || event.start, ext.workstation);
       } catch (err) {
         info.revert();
       }
@@ -1644,25 +1662,26 @@ const Scheduler = () => {
     }
   };
 
-  const rescheduleBatchGroup = async (groupId, eventsInGroup, targetDate, targetWorkstation) => {
-    const pad = n => String(n).padStart(2, '0');
-    const dateStr = `${targetDate.getFullYear()}-${pad(targetDate.getMonth() + 1)}-${pad(targetDate.getDate())}`;
-    const previousEvents = events;
+  const rescheduleBatchGroup = async (groupId, eventsInGroup, targetStart, targetEnd, targetWorkstation) => {
+    const startDt = targetStart instanceof Date ? targetStart : new Date(targetStart);
+    let endDt = targetEnd ? (targetEnd instanceof Date ? targetEnd : new Date(targetEnd)) : startDt;
+    if (isNaN(endDt.getTime())) endDt = startDt;
 
+    const formattedStart = formatDateTimeLocal(startDt);
+    const formattedEnd = formatDateTimeLocal(endDt);
+
+    const previousEvents = events;
     const targetWs = (targetWorkstation || 'Unassigned').trim();
     const optimistic = events.map(ev => {
       if (ev.extendedProps?.batchGroup?.batchGroupId === groupId) {
-        const newStart = new Date(targetDate);
-        newStart.setHours(8, 0, 0);
-        const newEnd = new Date(targetDate);
-        newEnd.setHours(17, 0, 0);
         return {
           ...ev,
-          start: newStart,
-          end: newEnd,
+          start: startDt,
+          end: endDt,
           extendedProps: {
             ...ev.extendedProps,
-            workstation: targetWs
+            workstation: targetWs,
+            timeRange: formatTimeRange(startDt, endDt)
           }
         };
       }
@@ -1677,13 +1696,15 @@ const Scheduler = () => {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          planned_start_date: dateStr,
+          planned_start_date: formattedStart,
+          planned_end_date: formattedEnd,
           workstation: targetWs
         })
       });
       const data = await resp.json();
       if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to reschedule batch group');
 
+      const dateStr = startDt.toLocaleDateString();
       showToast(`✓ Batch Group ${groupId} (${data.data?.updatedWOs?.length || eventsInGroup.length} Sub-Work-Orders) rescheduled to ${dateStr}`);
       await fetchSchedule(true);
     } catch (err) {
@@ -1758,7 +1779,11 @@ const Scheduler = () => {
     if (!ev) return;
 
     if (ev.isBatchGroup) {
-      await rescheduleBatchGroup(ev.groupId, ev.events, targetDate, targetWorkstation);
+      const startDt = new Date(targetDate);
+      startDt.setHours(8, 0, 0, 0);
+      const endDt = new Date(targetDate);
+      endDt.setHours(17, 0, 0, 0);
+      await rescheduleBatchGroup(ev.groupId, ev.events, startDt, endDt, targetWorkstation);
       setDraggedEvent(null);
       return;
     }
@@ -1818,7 +1843,7 @@ const Scheduler = () => {
   const fetchBatchGroupDetails = async () => {
     setBatchPanelLoading(true);
     try {
-      const resp = await fetch(`${API_URL}/batch-work-orders`);
+      const resp = await fetch(`${API_URL}/batch-work-orders?_t=${Date.now()}`, { cache: 'no-store' });
       const data = await resp.json();
       if (data.success && Array.isArray(data.groups)) {
         setBatchGroups(data.groups);
@@ -2205,24 +2230,9 @@ const Scheduler = () => {
                                     if (bGroup?.batchGroupId) {
                                       const gid = bGroup.batchGroupId;
                                       if (!batchGroupsInCell[gid]) {
-                                        // Find all events belonging to this batch group across matrixEvents
-                                        const allGroupEvs = matrixEvents.filter(e => e.extendedProps?.batchGroup?.batchGroupId === gid);
-                                        const master = allGroupEvs.find(e => e.extendedProps?.batchGroup?.role === 'master') || allGroupEvs[0];
-
-                                        if (master) {
-                                          const mStart = master.start instanceof Date ? master.start : new Date(master.start);
-                                          const mWs = (master.extendedProps?.workstation || 'Unassigned').trim();
-                                          const isSameDay = !isNaN(mStart.getTime()) &&
-                                            mStart.getFullYear() === day.getFullYear() &&
-                                            mStart.getMonth() === day.getMonth() &&
-                                            mStart.getDate() === day.getDate();
-
-                                          // Only anchor the batch group card in its primary date & workstation cell
-                                          if (isSameDay && mWs === stationName) {
-                                            batchGroupsInCell[gid] = allGroupEvs;
-                                          }
-                                        }
+                                        batchGroupsInCell[gid] = [];
                                       }
+                                      batchGroupsInCell[gid].push(ev);
                                     } else {
                                       standaloneEvents.push(ev);
                                     }
@@ -2296,8 +2306,18 @@ const Scheduler = () => {
                                                       className="matrix-batch-time clickable-time-badge"
                                                       onClick={(e) => {
                                                         e.stopPropagation();
-                                                        if (!isGroupLocked && targetEditEv) {
-                                                          openEditTimeModal(targetEditEv);
+                                                        if (!isGroupLocked) {
+                                                          openEditTimeModal({
+                                                            start: earliest,
+                                                            end: latest,
+                                                            extendedProps: {
+                                                              type: 'batchgroup',
+                                                              docName: groupId,
+                                                              itemCode: `${itemCode} (${subWOsList.length} Batches)`,
+                                                              workstation: stationName || 'Unassigned',
+                                                              status: liveStatus
+                                                            }
+                                                          });
                                                         }
                                                       }}
                                                       title={isGroupLocked ? 'Locked from rescheduling (In Process / Completed)' : 'Click to edit date & time'}
