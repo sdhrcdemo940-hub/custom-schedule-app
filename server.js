@@ -291,10 +291,16 @@ app.get('/api/workstations', async (req, res) => {
 
 // Get combined schedule (both Job Cards, Work Orders, and Workstations)
 app.get('/api/schedule', async (req, res) => {
+  const startTime = Date.now();
+  let totalERPNextRequests = 0;
+  const metrics = {};
+
   try {
-    // Fetch Workstations
+    // 1. Fetch Workstations
+    const t0 = Date.now();
     let workstations = [];
     try {
+      totalERPNextRequests++;
       const wsResp = await erpnextAPI.get('/Workstation', {
         params: {
           fields: JSON.stringify(['name', 'workstation_name', 'workstation_type', 'status']),
@@ -306,8 +312,11 @@ app.get('/api/schedule', async (req, res) => {
     } catch (wsErr) {
       console.warn('Could not fetch workstations:', wsErr.message);
     }
+    metrics.fetchWorkstationsMs = Date.now() - t0;
 
-    // Fetch Work Order names first, then fetch full documents individually
+    // 2. Fetch Work Order list & individual details
+    const t1 = Date.now();
+    totalERPNextRequests++;
     const woListResp = await erpnextAPI.get('/Work Order', {
       params: {
         fields: JSON.stringify(['name']),
@@ -316,6 +325,10 @@ app.get('/api/schedule', async (req, res) => {
       }
     });
     const woNames = (woListResp.data.data || []).map(r => r.name);
+    metrics.fetchWorkOrderListMs = Date.now() - t1;
+
+    const t2 = Date.now();
+    totalERPNextRequests += woNames.length;
     const workOrdersDetails = await Promise.all(woNames.map(async (n) => {
       try {
         const r = await erpnextAPI.get(`/Work Order/${n}`);
@@ -325,8 +338,12 @@ app.get('/api/schedule', async (req, res) => {
         return null;
       }
     }));
+    metrics.fetchWorkOrderDetailsMs = Date.now() - t2;
+    metrics.workOrderCount = woNames.length;
 
-    // Fetch Job Card names first, then fetch full documents individually
+    // 3. Fetch Job Card list & individual details
+    const t3 = Date.now();
+    totalERPNextRequests++;
     const jcListResp = await erpnextAPI.get('/Job Card', {
       params: {
         fields: JSON.stringify(['name']),
@@ -335,6 +352,10 @@ app.get('/api/schedule', async (req, res) => {
       }
     });
     const jcNames = (jcListResp.data.data || []).map(r => r.name);
+    metrics.fetchJobCardListMs = Date.now() - t3;
+
+    const t4 = Date.now();
+    totalERPNextRequests += jcNames.length;
     const jobCardsDetails = await Promise.all(jcNames.map(async (n) => {
       try {
         const r = await erpnextAPI.get(`/Job Card/${n}`);
@@ -344,11 +365,23 @@ app.get('/api/schedule', async (req, res) => {
         return null;
       }
     }));
+    metrics.fetchJobCardDetailsMs = Date.now() - t4;
+    metrics.jobCardCount = jcNames.length;
+
+    const totalResponseTimeMs = Date.now() - startTime;
+    metrics.totalResponseTimeMs = totalResponseTimeMs;
+    metrics.totalERPNextRequests = totalERPNextRequests;
+
+    console.log(`\n📊 [/api/schedule METRICS] Total: ${totalResponseTimeMs}ms | Requests to ERPNext: ${totalERPNextRequests} (${woNames.length} WOs, ${jcNames.length} JCs)`);
+    console.log(`   └─ Workstations: ${metrics.fetchWorkstationsMs}ms`);
+    console.log(`   └─ Work Order List: ${metrics.fetchWorkOrderListMs}ms | Details (${woNames.length}): ${metrics.fetchWorkOrderDetailsMs}ms`);
+    console.log(`   └─ Job Card List: ${metrics.fetchJobCardListMs}ms | Details (${jcNames.length}): ${metrics.fetchJobCardDetailsMs}ms\n`);
 
     res.json({
       workstations: workstations,
       jobCards: jobCardsDetails.filter(Boolean),
-      workOrders: workOrdersDetails.filter(Boolean)
+      workOrders: workOrdersDetails.filter(Boolean),
+      _metrics: metrics
     });
   } catch (error) {
     console.error('Error fetching schedule:', error.response ? error.response.data : error.message);
