@@ -372,8 +372,10 @@ const Scheduler = () => {
           : '';
         const station = (wo.workstation || wo.workstation_name || firstOpWorkstation || 'Unassigned').trim();
 
-        // Find all Job Cards linked to this Work Order
-        const linkedJobCards = rawJobCards.filter(jc => jc.work_order === wo.name);
+        // Find all Job Cards linked to this Work Order and sort by operation sequence
+        const linkedJobCards = rawJobCards
+          .filter(jc => jc.work_order === wo.name)
+          .sort((a, b) => (Number(a.sequence_id) || 0) - (Number(b.sequence_id) || 0) || (a.name || '').localeCompare(b.name || ''));
         const opCount = Array.isArray(wo.operations) ? wo.operations.length : linkedJobCards.length;
         const opSummary = opCount > 0 ? `${opCount} ops` : '';
         const title = `${itemCode}${qty ? ` (${qty} kg)` : ''} | WO: ${wo.name}${linkedJobCards.length > 0 ? ` (${linkedJobCards.length} JCs)` : ''}`;
